@@ -1,0 +1,48 @@
+Fix the bug where updating artist/series/tag on selected images sometimes fails with:
+
+    sqlite3.IntegrityError: FOREIGN KEY constraint failed
+
+This error happens when selecting a folder with subfolders and then batch editing metadata. The database update fails because some images reference an artist/series that does not exist in the corresponding parent tables.
+
+Requirements:
+
+1. Ensure that the metadata panel supports editing artist and series with an input box and a Save/Apply button for both single-image and batch updates.
+
+2. Before updating the images table:
+   - If a tag, artist, or series does not already exist in the corresponding table, automatically insert it into that table first.
+   - Only then update the child table entries for images.
+
+3. Database Constraints:
+   - Respect foreign key constraints.
+   - Ensure that columns in child tables (image metadata) reference valid parent table keys.
+   - Do not suppress foreign-key checking globally.
+
+4. For batch editing:
+   - If multiple images are selected and the user edits artist/series:
+     - Write logic to create the parent record if missing.
+     - Then update all selected child image records to reference that parent.
+
+5. UI Improvements:
+   - The metadata panel must have separate Save buttons for artist and series.
+   - These should trigger the insertion of missing parent rows and then update the image metadata.
+
+6. Implementation Suggestions:
+   - In metadata_manager.add_tags_to_images(file_paths, tags):
+       * For each tag, check existence in the tag table first.
+       * If not exists, insert it and get the new tag ID.
+       * Then call db.add_tags(child_image_paths, tag_id).
+   - Do the same for artist and series.
+   - Use SELECT to find if the parent exists, if not do INSERT then UPDATE.
+
+7. Error Safety:
+   - Wrap the update logic in transactions to avoid partial updates.
+   - Provide appropriate error handling and messages if something fails.
+
+8. Only modify the existing application structure.
+
+Deliverables:
+- Updated code fixing the foreign key constraint failure.
+- UI updates for artist/series input and save functionality.
+- Inline comments explaining changes.
+
+End.

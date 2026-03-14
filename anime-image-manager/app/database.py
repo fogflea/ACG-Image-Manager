@@ -2,12 +2,24 @@
 Database module — manages SQLite connection and all CRUD operations
 for image metadata (tags, artist, series, description).
 
-Fix: search_images() now uses REPLACE(file_path, '\\', '/') in the
-folder-prefix condition so that paths stored with backslashes (Windows
-os.walk) still match folder paths that come in with forward slashes
-(QFileSystemModel on Windows / Qt 6).  The trailing '/%' ensures only
-that exact folder and its subdirectories are matched — not sibling
-folders that happen to share the same name prefix.
+FK-safety fix
+-------------
+The image_tags table has:
+    FOREIGN KEY (file_path) REFERENCES images(file_path)
+
+If an image was found on disk via the filesystem fallback in
+get_images_in_folder() but the initial DB scan hasn't registered it yet,
+its file_path does not exist in the images table.  Any write to image_tags
+for that path therefore raises:
+    sqlite3.IntegrityError: FOREIGN KEY constraint failed
+
+Fix: every write function now calls _ensure_images_exist() first, which
+does a bulk INSERT OR IGNORE into images for all target paths before any
+child-table update.  This is safe — INSERT OR IGNORE leaves existing rows
+untouched; it only adds the row if it is truly missing.
+
+All write operations are wrapped in a single transaction so a partial
+failure leaves the database unchanged.
 """
 
 import sqlite3
@@ -65,11 +77,33 @@ def init_db() -> None:
         conn.commit()
 
 
+# ---------------------------------------------------------------------------
+# FK-safety helper
+# ---------------------------------------------------------------------------
+
+def _ensure_images_exist(conn: sqlite3.Connection, file_paths: list[str]) -> None:
+    """
+    Guarantee every path in file_paths has a row in the images table.
+
+    Uses INSERT OR IGNORE so existing rows (with all their metadata) are
+    never overwritten.  This prevents FK constraint violations when editing
+    metadata for images that exist on disk but haven't been indexed yet.
+    """
+    conn.executemany(
+        "INSERT OR IGNORE INTO images (file_path) VALUES (?)",
+        [(fp,) for fp in file_paths],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Basic image row management
+# ---------------------------------------------------------------------------
+
 def upsert_image(file_path: str) -> None:
     with get_connection() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO images (file_path) VALUES (?)",
-            (file_path,)
+            (file_path,),
         )
         conn.commit()
 
@@ -93,40 +127,78 @@ def get_image_metadata(file_path: str) -> Optional[dict]:
                JOIN image_tags it ON t.id = it.tag_id
                WHERE it.file_path = ?
                ORDER BY t.name""",
-            (file_path,)
+            (file_path,),
         ).fetchall()
         data["tags"] = [r["name"] for r in tags]
         return data
 
 
+# ---------------------------------------------------------------------------
+# Metadata writers — all call _ensure_images_exist() first
+# ---------------------------------------------------------------------------
+
 def set_artist(file_paths: list[str], artist: str) -> None:
-    with get_connection() as conn:
-        conn.executemany(
-            "UPDATE images SET artist = ? WHERE file_path = ?",
-            [(artist, fp) for fp in file_paths]
-        )
-        conn.commit()
+    """
+    Set the artist field for every path in file_paths.
+
+    Upserts missing image rows first so the UPDATE always affects at
+    least one row, even for images not yet indexed by the scanner.
+    """
+    if not file_paths:
+        return
+    try:
+        with get_connection() as conn:
+            _ensure_images_exist(conn, file_paths)          # FK-safety
+            conn.executemany(
+                "UPDATE images SET artist = ? WHERE file_path = ?",
+                [(artist, fp) for fp in file_paths],
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to save artist: {exc}") from exc
 
 
 def set_series(file_paths: list[str], series: str) -> None:
-    with get_connection() as conn:
-        conn.executemany(
-            "UPDATE images SET series = ? WHERE file_path = ?",
-            [(series, fp) for fp in file_paths]
-        )
-        conn.commit()
+    """
+    Set the series field for every path in file_paths.
+
+    Upserts missing image rows first so the UPDATE always affects at
+    least one row, even for images not yet indexed by the scanner.
+    """
+    if not file_paths:
+        return
+    try:
+        with get_connection() as conn:
+            _ensure_images_exist(conn, file_paths)          # FK-safety
+            conn.executemany(
+                "UPDATE images SET series = ? WHERE file_path = ?",
+                [(series, fp) for fp in file_paths],
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to save series: {exc}") from exc
 
 
 def set_description(file_path: str, description: str) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE images SET description = ? WHERE file_path = ?",
-            (description, file_path)
-        )
-        conn.commit()
+    """Set the description for a single image. Upserts the row if missing."""
+    try:
+        with get_connection() as conn:
+            _ensure_images_exist(conn, [file_path])         # FK-safety
+            conn.execute(
+                "UPDATE images SET description = ? WHERE file_path = ?",
+                (description, file_path),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to save description: {exc}") from exc
 
+
+# ---------------------------------------------------------------------------
+# Tag helpers
+# ---------------------------------------------------------------------------
 
 def _get_or_create_tag(conn: sqlite3.Connection, tag_name: str) -> int:
+    """Return the tag id, creating the tag row if it doesn't exist yet."""
     tag_name = tag_name.strip().lower()
     row = conn.execute("SELECT id FROM tags WHERE name = ?", (tag_name,)).fetchone()
     if row:
@@ -136,32 +208,62 @@ def _get_or_create_tag(conn: sqlite3.Connection, tag_name: str) -> int:
 
 
 def add_tags(file_paths: list[str], tags: list[str]) -> None:
-    with get_connection() as conn:
-        for tag_name in tags:
-            tag_name = tag_name.strip().lower()
-            if not tag_name:
-                continue
-            tag_id = _get_or_create_tag(conn, tag_name)
-            conn.executemany(
-                "INSERT OR IGNORE INTO image_tags (file_path, tag_id) VALUES (?, ?)",
-                [(fp, tag_id) for fp in file_paths]
-            )
-        conn.commit()
+    """
+    Add each tag to every image in file_paths.
+
+    Steps (all inside one transaction):
+      1. Upsert every image row — prevents FK violation on image_tags.
+      2. For each tag, get-or-create its row in the tags table.
+      3. Bulk-insert into image_tags (INSERT OR IGNORE = idempotent).
+    """
+    if not file_paths or not tags:
+        return
+    try:
+        with get_connection() as conn:
+            # Step 1 — guarantee parent rows exist
+            _ensure_images_exist(conn, file_paths)
+
+            for tag_name in tags:
+                tag_name = tag_name.strip().lower()
+                if not tag_name:
+                    continue
+                # Step 2 — guarantee tag row exists
+                tag_id = _get_or_create_tag(conn, tag_name)
+                # Step 3 — link images to tag
+                conn.executemany(
+                    "INSERT OR IGNORE INTO image_tags (file_path, tag_id) VALUES (?, ?)",
+                    [(fp, tag_id) for fp in file_paths],
+                )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to add tags: {exc}") from exc
 
 
 def remove_tags(file_paths: list[str], tags: list[str]) -> None:
-    with get_connection() as conn:
-        for tag_name in tags:
-            tag_name = tag_name.strip().lower()
-            row = conn.execute("SELECT id FROM tags WHERE name = ?", (tag_name,)).fetchone()
-            if not row:
-                continue
-            conn.executemany(
-                "DELETE FROM image_tags WHERE file_path = ? AND tag_id = ?",
-                [(fp, row["id"]) for fp in file_paths]
-            )
-        conn.commit()
+    """Remove each tag from every image in file_paths."""
+    if not file_paths or not tags:
+        return
+    try:
+        with get_connection() as conn:
+            for tag_name in tags:
+                tag_name = tag_name.strip().lower()
+                row = conn.execute(
+                    "SELECT id FROM tags WHERE name = ?", (tag_name,)
+                ).fetchone()
+                if not row:
+                    continue
+                conn.executemany(
+                    "DELETE FROM image_tags WHERE file_path = ? AND tag_id = ?",
+                    [(fp, row["id"]) for fp in file_paths],
+                )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to remove tags: {exc}") from exc
 
+
+# ---------------------------------------------------------------------------
+# Read helpers
+# ---------------------------------------------------------------------------
 
 def get_all_tags() -> list[str]:
     with get_connection() as conn:
@@ -195,16 +297,16 @@ def search_images(
     tags: list[str] = None,
     artist: str = "",
     series: str = "",
-    folder_prefix: str = ""
+    folder_prefix: str = "",
 ) -> list[str]:
     with get_connection() as conn:
         query = "SELECT DISTINCT i.file_path FROM images i"
-        conditions = []
-        params = []
+        conditions: list[str] = []
+        params: list = []
 
         if tags:
             for idx, tag in enumerate(tags):
-                alias = f"it{idx}"
+                alias   = f"it{idx}"
                 alias_t = f"t{idx}"
                 query += f" JOIN image_tags {alias} ON i.file_path = {alias}.file_path"
                 query += (
@@ -222,20 +324,12 @@ def search_images(
             params.append(f"%{series}%")
 
         if folder_prefix:
-            # ---------------------------------------------------------------
-            # Fix: normalise BOTH sides of the comparison to forward slashes
-            # so that paths stored as "C:\images\artist\img.jpg" (Windows
-            # os.walk) match a folder_prefix of "C:/images/artist"
-            # (QFileSystemModel on Qt 6 / Windows).
-            #
-            # The trailing '/% ' pattern means:
-            #   • "C:/images/artistA/%"  matches  C:/images/artistA/img.jpg  ✓
-            #   • "C:/images/artistA/%"  does NOT match C:/images/artistABC/img.jpg  ✗
-            # ---------------------------------------------------------------
+            # Normalise both sides to forward slashes so that paths stored
+            # with backslashes (Windows os.walk) still match the forward-slash
+            # path emitted by QFileSystemModel.  The trailing '/% ' boundary
+            # prevents matching sibling folders with the same name prefix.
             norm = _norm(folder_prefix)
-            conditions.append(
-                "REPLACE(i.file_path, '\\', '/') LIKE ?"
-            )
+            conditions.append("REPLACE(i.file_path, '\\', '/') LIKE ?")
             params.append(f"{norm}/%")
 
         if conditions:
