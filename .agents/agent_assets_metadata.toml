@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "4-2cOt2etV8XTZDrbmGSU"
+uri = "file://anime-image-manager/BUILD_INSTRUCTIONS.md"
+type = "text"
+title = "Build Instructions (PyInstaller EXE)"

@@ -1,0 +1,386 @@
+Build a lightweight portable Windows application for managing anime / illustration images with tags.
+
+IMPORTANT:
+This project already existed before but I am recreating it from scratch. 
+Please implement the full system cleanly and modularly.
+
+Before writing code:
+1. Explain the architecture and file structure.
+2. Then implement the project step by step.
+
+--------------------------------
+
+APP PURPOSE
+
+This app is a lightweight image manager designed for anime / illustration collections.
+
+It should allow users to:
+
+- manage thousands of images
+- assign tags
+- assign artist
+- assign series
+- browse folders like Windows Explorer
+- search images using metadata
+
+The app must remain lightweight and portable.
+
+--------------------------------
+
+TECH STACK
+
+Language:
+Python
+
+GUI:
+PySide6 (Qt for Python)
+
+Image handling:
+Pillow
+
+Database:
+SQLite
+
+Packaging:
+PyInstaller portable EXE
+
+--------------------------------
+
+PORTABLE REQUIREMENTS
+
+The application must run entirely inside one folder.
+
+Example structure:
+
+app/
+    main.py
+    database.py
+    image_scanner.py
+    thumbnail_cache.py
+    search_engine.py
+    metadata_manager.py
+
+ui/
+    main_window.py
+    image_grid.py
+    folder_tree.py
+    metadata_panel.py
+    search_bar.py
+    image_viewer.py
+
+data/
+    database.db
+
+cache/
+    thumbnails/
+
+images/
+
+The app must continue to work even if the whole folder is moved to another computer.
+
+--------------------------------
+
+IMAGE SOURCE
+
+Images are automatically loaded from:
+
+./images/
+
+The program should recursively scan all subfolders.
+
+Supported formats:
+
+jpg
+jpeg
+png
+webp
+gif
+
+--------------------------------
+
+DATABASE MODEL
+
+Each image should store metadata:
+
+file_path (primary key)
+
+tags (multiple)
+
+artist (single)
+
+series (single)
+
+optional description
+
+--------------------------------
+
+UI LAYOUT
+
+Main window layout must use QSplitter.
+
+Left panel:
+folder tree
+
+Center panel:
+image thumbnail grid
+
+Right panel:
+metadata editor
+
+Top bar:
+search bar
+refresh button
+tag/artist/series picker button
+
+--------------------------------
+
+FOLDER TREE (LEFT PANEL)
+
+Behave like Windows Explorer.
+
+Requirements:
+
+Use QFileSystemModel + QTreeView.
+
+Features:
+
+- show only folders
+- folders expandable
+- folders collapsible
+- support nested directories
+- arrow indicators for parent folders
+- selecting a folder filters images
+
+Example:
+
+images
+ ├ artistA
+ │ ├ set1
+ │ └ set2
+ └ artistB
+
+--------------------------------
+
+IMAGE GRID (CENTER PANEL)
+
+Display thumbnails.
+
+Requirements:
+
+- thumbnail grid
+- lazy loading
+- scrollable
+- adjustable thumbnail size
+
+Thumbnail sizes:
+
+64px
+128px
+256px
+
+Thumbnails should be cached in:
+
+./cache/thumbnails
+
+--------------------------------
+
+IMAGE VIEWER
+
+Double-clicking an image opens a full viewer.
+
+Viewer features:
+
+- zoom
+- fit to window
+- next image
+- previous image
+
+Keyboard shortcuts:
+
+Left arrow → previous image
+
+Right arrow → next image
+
+ESC → close
+
+Mouse wheel → zoom
+
+--------------------------------
+
+RIGHT PANEL (METADATA EDITOR)
+
+Show metadata for selected image(s).
+
+Editable fields:
+
+tags
+artist
+series
+description
+
+--------------------------------
+
+BATCH EDITING
+
+Support selecting multiple images.
+
+User can batch modify:
+
+tags
+artist
+series
+
+Behavior:
+
+Adding tag → applied to all selected images.
+
+Removing tag → removed from all selected images.
+
+--------------------------------
+
+SEARCH SYSTEM
+
+Search bar supports:
+
+tag search
+
+artist search
+
+series search
+
+Example queries:
+
+tag:catgirl
+
+artist:someArtist
+
+series:ReZero
+
+Multiple conditions supported:
+
+tag:maid tag:catgirl
+
+artist:xxx tag:school
+
+--------------------------------
+
+TAG / ARTIST / SERIES PICKER
+
+Add a button next to search bar.
+
+When clicked open a popup window.
+
+Tabs:
+
+Tags
+Artists
+Series
+
+Each tab displays all existing items.
+
+Clicking an item inserts it into search box.
+
+Example:
+
+Click "catgirl"
+
+search box becomes:
+
+tag:catgirl
+
+Popup must support search filtering.
+
+--------------------------------
+
+RIGHT CLICK MENU (IMAGE)
+
+Add context menu options:
+
+Open image viewer
+
+Show in Windows Explorer
+
+Implementation idea:
+
+subprocess.run(["explorer", "/select,", image_path])
+
+--------------------------------
+
+REFRESH SYSTEM
+
+Refresh button rescans images folder.
+
+IMPORTANT:
+
+Refreshing must NOT freeze UI.
+
+Directory scanning must run in background thread.
+
+Use:
+
+QThread or QtConcurrent
+
+While refreshing:
+
+show loading indicator.
+
+--------------------------------
+
+BUGS THAT MUST NOT HAPPEN
+
+1. UI freeze during refresh
+
+2. thumbnail grid overlapping sidebar
+
+Use QSplitter so panels resize correctly.
+
+3. thumbnails hidden when sidebar collapsed
+
+Center panel must auto expand.
+
+--------------------------------
+
+PERFORMANCE REQUIREMENTS
+
+App must handle at least:
+
+10,000 images.
+
+Use:
+
+thumbnail cache
+
+lazy loading
+
+incremental scanning
+
+Refresh must only:
+
+add new images
+
+remove missing images
+
+NOT rescan everything every time.
+
+--------------------------------
+
+FINAL REQUIREMENTS
+
+The code must:
+
+be modular
+
+be readable
+
+be easy to extend
+
+--------------------------------
+
+OUTPUT FORMAT
+
+1. architecture explanation
+2. folder structure
+3. database schema
+4. UI layout explanation
+5. full implementation
+6. instructions to build portable EXE using PyInstaller
