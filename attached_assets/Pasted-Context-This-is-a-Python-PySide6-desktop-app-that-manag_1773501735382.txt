@@ -1,0 +1,95 @@
+Context:
+This is a Python PySide6 desktop app that manages anime images with tags, artists, series, folder browsing, thumbnails, and search. The current code mostly works, but there are several bugs and missing behaviors that need to be fixed.
+
+Purpose:
+Fix specific bugs and add enhancements according to the detailed requirements below. Provide complete working code updates.
+
+Fix / Enhancement Requirements:
+
+---
+
+1. Left Folder Tree Behavior
+When clicking/selecting a folder on the left folder tree, the center thumbnail grid must update and show **all images under that folder** (including nested subfolders if any).  
+Ensure:
+- Folder click triggers refresh of the image grid.
+- Only images under the selected folder should show.
+- Maintain responsiveness.
+
+You must modify or add a signal/slot or callback that filters the grid based on the selected folder path.
+
+---
+
+2. Search Filter Button Improvements
+There is already a button next to the search bar to insert tags/artists/series into the search box. Improve it as follows:
+
+a) The popup button must show three tabs: **Tags, Artists, Series**.
+
+b) Each tab lists all existing tags, artists, or series from the database.
+
+c) When an item is clicked:
+   - It is inserted into the search box in the format:
+     * tag:xxx
+     * artist:xxx
+     * series:xxx
+   - If the item already exists in the search box, clicking again should **remove** it from the search box.
+
+d) The popup should visually indicate which tags, artists, or series are already included in the search box by showing them as selected (e.g., checkbox or highlight).
+
+e) The popup should support filter/search within the list as well.
+
+---
+
+3. Parsing and Updating Search Box
+Implement search input parsing logic that supports multiple filters combined, such as:
+* tag:maid tag:catgirl
+* artist:Kyo series:ReZero tag:school
+
+Ensure removing a filter via the popup also updates the search box correctly.
+
+---
+
+4. Popup Selection UI State
+In the popup window:
+- Already-selected filters from the search box must appear as selected when the popup opens.
+- Clicking an already-selected item must unselect it and remove it from the search box.
+
+---
+
+5. Remember Window Size
+Add logic to remember the main window size (width & height) between launches:
+- On close, save the window size using persistent local settings (e.g., QSettings).
+- On start, load and apply the last saved window size.
+- If no saved size exists, use a reasonable default.
+
+---
+
+6. Layout Bug Fix
+The center thumbnail grid area currently can be clipped or hidden under the right metadata panel.  
+Fix layout to use **QSplitter** properly so that:
+- Panels can be resized by the user.
+- Center grid resizes when the sidebar is collapsed or expanded.
+- No thumbnails should be invisible due to fixed layouts.
+
+---
+
+Behavior Expectations:
+- Click folder → thumbnails refresh correctly.
+- Popup search filter button shows all available filters and reflects current search selection visually.
+- Search box adds/removes filters correctly.
+- Main window size persists across app restarts.
+- UI does not block images due to layout.
+
+---
+
+Deliverables:
+1) Updated source code files with bug fixes and enhancements.
+2) Clear inline comments explaining changes.
+3) Examples of how to test the new behaviors (manual steps).
+4) If needed, brief explanation of signal-slot connections or state management logic.
+
+Constraints:
+- Maintain use of PySide6 for GUI.
+- Use existing project structure unless absolutely necessary to refactor.
+- Must be portable (no dependencies outside existing ones).
+
+Please respond only with code and minimal explanation where necessary. End.
