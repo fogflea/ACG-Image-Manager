@@ -145,6 +145,11 @@ class ImageGrid(QWidget):
 
         self._count_label.setText(f"{len(paths)} image(s)")
 
+    # Alias used by FolderFilterThread.results_ready signal connection
+    def load_images(self, paths: list[str]) -> None:
+        """Alias for set_images — called by FolderFilterThread when results arrive."""
+        self.set_images(paths)
+
     def _load_visible_thumbnails(self) -> None:
         viewport = self._list.viewport()
         vp_rect = viewport.rect()

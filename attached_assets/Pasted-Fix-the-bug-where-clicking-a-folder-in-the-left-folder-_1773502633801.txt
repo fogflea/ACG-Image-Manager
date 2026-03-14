@@ -1,0 +1,47 @@
+Fix the bug where clicking a folder in the left folder tree does not show all images under that folder (including its subfolders) in the middle image grid.
+
+Context:
+This project is a PySide6-based Windows image management application. The left folder panel uses QFileSystemModel and QTreeView to show folders like Windows Explorer. However, when a folder is clicked, the image grid does not display images under that folder and its subfolders.
+
+Objective:
+Update the folder click handling logic so that selecting a folder displays all image files in that folder and any nested subfolders.
+
+Requirements:
+
+1. Folder Click Behavior
+- When the user clicks any folder in the left tree view, trigger a callback to collect all images under that folder and all nested subfolders recursively.
+- Supported image extensions: jpg, jpeg, png, webp, gif.
+
+2. Recursive Image Collection
+- Implement a function to recursively scan a selected folder and its subfolders for supported images.
+- This should NOT block the UI; use threading or QtConcurrent to perform scanning if necessary.
+
+3. Update Image Grid
+- After retrieving all image paths, update the central image grid so it clears any previous content and displays the new set of thumbnails.
+- Make sure the image grid display respects existing grid layout logic.
+
+4. Signal / Slot Integration
+- Ensure the folder click signal connects correctly to the scanning logic.
+- Example: QTreeView.clicked or QTreeView.selectionChanged should call a function in main window like `on_folder_selected(path)`.
+
+5. Example Implementation Guidance
+- Use Python’s os.walk or PySide6’s QDirIterator for recursive scanning.
+- A helper function named `get_images_in_folder(folder_path)` should return a list of image paths.
+- In the signal handler, call this helper with the selected folder path, then call `image_grid.load_images(image_list)`.
+
+6. Performance Considerations
+- If scanning is slow for large directories (thousands of images), use a background thread so UI remains responsive.
+- Use a loading indicator during scanning.
+
+7. Maintain Existing Database Sync
+- If the project uses a database of images, also allow filtering images by prefix matching the selected folder path (e.g., SQL WHERE file_path LIKE 'selected_folder/%').
+
+Deliverables:
+- Updated code for folder click event handling.
+- Implementation of recursive image finder function.
+- Integration with image grid update logic.
+- Comments explaining changes.
+
+The fix must work with the existing project structure and not break other features.
+
+End.

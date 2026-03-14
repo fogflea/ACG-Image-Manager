@@ -1,11 +1,19 @@
 """
 Main window — root QMainWindow that assembles all panels using QSplitter.
 
-Fix #5: Window size is saved on close and restored on next launch via QSettings.
-Fix #6: QSplitter panels are set non-collapsible and have a minimum size so the
-        center thumbnail grid can never be hidden behind the metadata panel.
-        The splitter stretch factor on the center panel ensures it always
-        expands to fill available space.
+Key changes in this version
+----------------------------
+* Folder click → FolderFilterThread (background, non-blocking).
+  The thread uses get_images_in_folder() which:
+    - queries the DB with a properly-normalised LIKE prefix (fixes the
+      backslash / forward-slash mismatch on Windows), AND
+    - falls back to a direct filesystem scan so images that haven't been
+      indexed yet still appear immediately.
+* A loading indicator in the status bar is shown while any filter thread
+  is running.
+* Window size + splitter proportions are persisted via QSettings.
+* All three QSplitter panels are non-collapsible with a minimum width so
+  the center grid can never be hidden.
 """
 
 from PySide6.QtCore import Qt, QTimer, QSettings
@@ -14,19 +22,17 @@ from PySide6.QtWidgets import (
     QStatusBar, QProgressBar, QLabel
 )
 
-from app.database import search_images, get_all_image_paths
-from app.image_scanner import ScannerThread
-from app.search_engine import execute_search
+from app.database import get_all_image_paths
+from app.image_scanner import ScannerThread, FolderFilterThread
 from ui.folder_tree import FolderTree
 from ui.image_grid import ImageGrid
 from ui.metadata_panel import MetadataPanel
 from ui.search_bar import SearchBar
 from ui.image_viewer import ImageViewer
 
-# QSettings keys
-_SETTINGS_ORG = "AnimeImageManager"
-_SETTINGS_APP = "MainWindow"
-_KEY_GEOMETRY = "geometry"
+_SETTINGS_ORG  = "AnimeImageManager"
+_SETTINGS_APP  = "MainWindow"
+_KEY_GEOMETRY  = "geometry"
 _KEY_SPLITTER  = "splitter_sizes"
 
 
@@ -37,15 +43,16 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 600)
 
         self._current_folder: str = ""
-        self._current_query: str = ""
+        self._current_query:  str = ""
+
+        # Keep a reference to any running background threads so we can
+        # cancel a stale one before starting a new filter request.
         self._scanner: ScannerThread = None
+        self._filter_thread: FolderFilterThread = None
 
         self._build_ui()
         self._apply_dark_style()
-
-        # Fix #5: restore previous window size (falls back to 1400×850)
         self._restore_geometry()
-
         self._start_initial_scan()
 
     # ------------------------------------------------------------------
@@ -64,9 +71,8 @@ class MainWindow(QMainWindow):
         self._search_bar.refresh_triggered.connect(self._start_scan)
         root_layout.addWidget(self._search_bar)
 
-        # Fix #6: use a QSplitter so all three panels resize correctly.
-        # setCollapsible(False) prevents any panel from shrinking to zero,
-        # which was the root cause of thumbnails disappearing.
+        # Splitter — all three panels are non-collapsible so the center
+        # grid can never be hidden behind the right metadata panel.
         self._splitter = QSplitter(Qt.Horizontal)
         self._splitter.setHandleWidth(5)
         root_layout.addWidget(self._splitter, stretch=1)
@@ -75,29 +81,27 @@ class MainWindow(QMainWindow):
         self._folder_tree.setMinimumWidth(120)
         self._folder_tree.folder_selected.connect(self._on_folder_selected)
         self._splitter.addWidget(self._folder_tree)
-        self._splitter.setCollapsible(0, False)   # left panel never collapses
+        self._splitter.setCollapsible(0, False)
 
         self._image_grid = ImageGrid()
-        self._image_grid.setMinimumWidth(300)      # always visible
+        self._image_grid.setMinimumWidth(300)
         self._image_grid.selection_changed.connect(self._on_selection_changed)
         self._image_grid.open_viewer_requested.connect(self._open_viewer)
         self._splitter.addWidget(self._image_grid)
-        self._splitter.setCollapsible(1, False)   # center panel never collapses
+        self._splitter.setCollapsible(1, False)
 
         self._metadata_panel = MetadataPanel()
         self._metadata_panel.setMinimumWidth(200)
         self._metadata_panel.metadata_changed.connect(self._on_metadata_changed)
         self._splitter.addWidget(self._metadata_panel)
-        self._splitter.setCollapsible(2, False)   # right panel never collapses
+        self._splitter.setCollapsible(2, False)
 
-        # Fix #6: only the center panel (index 1) stretches when the window grows
         self._splitter.setStretchFactor(0, 0)
-        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setStretchFactor(1, 1)   # center panel stretches
         self._splitter.setStretchFactor(2, 0)
+        self._splitter.setSizes([210, 900, 290])  # default; overridden by settings
 
-        # Default proportions — overridden by saved settings if present
-        self._splitter.setSizes([210, 900, 290])
-
+        # Status bar
         status_bar = QStatusBar()
         self.setStatusBar(status_bar)
 
@@ -105,44 +109,41 @@ class MainWindow(QMainWindow):
         status_bar.addWidget(self._status_label, 1)
 
         self._progress = QProgressBar()
-        self._progress.setRange(0, 0)
+        self._progress.setRange(0, 0)          # indeterminate spinner
         self._progress.setFixedWidth(150)
         self._progress.setVisible(False)
         status_bar.addPermanentWidget(self._progress)
 
     # ------------------------------------------------------------------
-    # Window geometry persistence  (Fix #5)
+    # Window geometry persistence
     # ------------------------------------------------------------------
 
     def _settings(self) -> QSettings:
         return QSettings(_SETTINGS_ORG, _SETTINGS_APP)
 
     def _restore_geometry(self) -> None:
-        settings = self._settings()
-        geometry = settings.value(_KEY_GEOMETRY)
-        if geometry:
-            self.restoreGeometry(geometry)
+        s = self._settings()
+        geo = s.value(_KEY_GEOMETRY)
+        if geo:
+            self.restoreGeometry(geo)
         else:
-            # Default size when no settings exist yet
             self.resize(1400, 850)
 
-        splitter_sizes = settings.value(_KEY_SPLITTER)
-        if splitter_sizes:
-            # QSettings stores lists as strings on some platforms; convert
+        sizes = s.value(_KEY_SPLITTER)
+        if sizes:
             try:
-                sizes = [int(s) for s in splitter_sizes]
-                if len(sizes) == 3 and all(s > 0 for s in sizes):
-                    self._splitter.setSizes(sizes)
+                int_sizes = [int(v) for v in sizes]
+                if len(int_sizes) == 3 and all(v > 0 for v in int_sizes):
+                    self._splitter.setSizes(int_sizes)
             except (TypeError, ValueError):
                 pass
 
     def _save_geometry(self) -> None:
-        settings = self._settings()
-        settings.setValue(_KEY_GEOMETRY, self.saveGeometry())
-        settings.setValue(_KEY_SPLITTER, self._splitter.sizes())
+        s = self._settings()
+        s.setValue(_KEY_GEOMETRY, self.saveGeometry())
+        s.setValue(_KEY_SPLITTER, self._splitter.sizes())
 
     def closeEvent(self, event) -> None:
-        """Fix #5: persist window size + splitter layout before closing."""
         self._save_geometry()
         super().closeEvent(event)
 
@@ -250,7 +251,7 @@ class MainWindow(QMainWindow):
         """)
 
     # ------------------------------------------------------------------
-    # Scanning
+    # DB / filesystem sync (ScannerThread)
     # ------------------------------------------------------------------
 
     def _start_initial_scan(self) -> None:
@@ -259,47 +260,77 @@ class MainWindow(QMainWindow):
     def _start_scan(self) -> None:
         if self._scanner and self._scanner.isRunning():
             return
-
-        self._progress.setVisible(True)
-        self._status_label.setText("Scanning images folder...")
-
+        self._show_loading("Scanning images folder...")
         self._scanner = ScannerThread(self)
         self._scanner.progress.connect(self._status_label.setText)
-        self._scanner.images_added.connect(self._on_images_added)
-        self._scanner.images_removed.connect(self._on_images_removed)
+        self._scanner.images_added.connect(lambda _: None)   # grid refresh on finished
+        self._scanner.images_removed.connect(lambda _: None)
         self._scanner.finished_scan.connect(self._on_scan_finished)
         self._scanner.start()
 
-    def _on_images_added(self, _paths: list[str]) -> None:
-        self._refresh_grid()
-
-    def _on_images_removed(self, _paths: list[str]) -> None:
-        self._refresh_grid()
-
     def _on_scan_finished(self, added: int, removed: int) -> None:
-        self._progress.setVisible(False)
-        self._status_label.setText(f"Scan complete — {added} added, {removed} removed")
-        self._refresh_grid()
+        self._hide_loading()
+        self._status_label.setText(
+            f"Scan complete — {added} added, {removed} removed"
+        )
+        # Re-apply current folder + query so the grid shows correct results
+        self._trigger_filter()
         self._folder_tree.refresh()
 
     # ------------------------------------------------------------------
-    # Grid refresh (Fix #1 support — folder filter uses LIKE prefix in DB)
+    # Non-blocking grid filter (FolderFilterThread)
     # ------------------------------------------------------------------
 
-    def _refresh_grid(self) -> None:
-        query = self._current_query
-        folder = self._current_folder   # empty string = no folder filter
+    def _trigger_filter(self) -> None:
+        """
+        Start a FolderFilterThread for the current folder + query state.
 
-        if query:
-            # search_engine passes folder_prefix to the DB for combined filter
-            paths = execute_search(query, folder_prefix=folder)
-        elif folder:
-            # Fix #1: folder_prefix is a LIKE 'path%' match → includes subfolders
-            paths = search_images(folder_prefix=folder)
-        else:
-            paths = get_all_image_paths()
+        Any previously running filter thread is abandoned (its result will
+        be ignored because we reconnect the signal on each new thread).
+        """
+        # Disconnect the old thread's signal so stale results are ignored
+        if self._filter_thread is not None and self._filter_thread.isRunning():
+            try:
+                self._filter_thread.results_ready.disconnect()
+            except RuntimeError:
+                pass   # already disconnected
 
-        self._image_grid.set_images(sorted(paths))
+        folder = self._current_folder
+        query  = self._current_query
+
+        # Fast synchronous path: no folder and no query — just dump the DB
+        if not folder and not query:
+            paths = sorted(get_all_image_paths())
+            self._image_grid.load_images(paths)
+            self._status_label.setText(f"{len(paths)} images loaded")
+            return
+
+        # Slow path: run in a background thread
+        self._show_loading(
+            f"Filtering {'folder' if folder else 'results'}…"
+        )
+
+        thread = FolderFilterThread(
+            folder_path=folder,
+            search_query=query,
+            parent=self,
+        )
+        # Connect BEFORE starting so we don't miss an instant result
+        thread.results_ready.connect(self._on_filter_results)
+        thread.finished.connect(self._hide_loading)
+
+        self._filter_thread = thread
+        thread.start()
+
+    def _on_filter_results(self, paths: list[str]) -> None:
+        """Receives sorted image paths from FolderFilterThread."""
+        self._image_grid.load_images(paths)
+        label = self._current_folder or "search results"
+        self._status_label.setText(
+            f"{len(paths)} image(s) in {label!r}"
+            if self._current_folder
+            else f"{len(paths)} image(s) matching query"
+        )
 
     # ------------------------------------------------------------------
     # Signal handlers
@@ -307,15 +338,21 @@ class MainWindow(QMainWindow):
 
     def _on_folder_selected(self, folder_path: str) -> None:
         """
-        Fix #1: receives the absolute folder path from FolderTree.
-        An empty string means "All Images" (no folder filter).
+        Called when the user clicks a folder in the left tree.
+
+        folder_path is an absolute path emitted by QFileSystemModel, using
+        forward slashes on Qt 6 (even on Windows).  An empty string means
+        "All Images" — no folder filter.
+
+        The actual image resolution runs in FolderFilterThread so the UI
+        never freezes, even for folders with thousands of images.
         """
         self._current_folder = folder_path
-        self._refresh_grid()
+        self._trigger_filter()
 
     def _on_search(self, query: str) -> None:
         self._current_query = query
-        self._refresh_grid()
+        self._trigger_filter()
 
     def _on_selection_changed(self, paths: list[str]) -> None:
         self._metadata_panel.load_selection(paths)
@@ -328,3 +365,14 @@ class MainWindow(QMainWindow):
     def _open_viewer(self, paths: list[str], index: int) -> None:
         viewer = ImageViewer(paths, start_index=index, parent=self)
         viewer.exec()
+
+    # ------------------------------------------------------------------
+    # Loading indicator helpers
+    # ------------------------------------------------------------------
+
+    def _show_loading(self, message: str = "Loading…") -> None:
+        self._status_label.setText(message)
+        self._progress.setVisible(True)
+
+    def _hide_loading(self) -> None:
+        self._progress.setVisible(False)

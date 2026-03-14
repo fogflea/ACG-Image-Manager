@@ -1,6 +1,13 @@
 """
 Database module — manages SQLite connection and all CRUD operations
 for image metadata (tags, artist, series, description).
+
+Fix: search_images() now uses REPLACE(file_path, '\\', '/') in the
+folder-prefix condition so that paths stored with backslashes (Windows
+os.walk) still match folder paths that come in with forward slashes
+(QFileSystemModel on Windows / Qt 6).  The trailing '/%' ensures only
+that exact folder and its subdirectories are matched — not sibling
+folders that happen to share the same name prefix.
 """
 
 import sqlite3
@@ -10,6 +17,11 @@ from typing import Optional
 
 
 DB_PATH = Path(__file__).parent.parent / "data" / "database.db"
+
+
+def _norm(path: str) -> str:
+    """Normalise a path to forward slashes and strip any trailing separator."""
+    return path.replace("\\", "/").rstrip("/")
 
 
 def get_connection() -> sqlite3.Connection:
@@ -195,7 +207,10 @@ def search_images(
                 alias = f"it{idx}"
                 alias_t = f"t{idx}"
                 query += f" JOIN image_tags {alias} ON i.file_path = {alias}.file_path"
-                query += f" JOIN tags {alias_t} ON {alias}.tag_id = {alias_t}.id AND {alias_t}.name = ?"
+                query += (
+                    f" JOIN tags {alias_t}"
+                    f" ON {alias}.tag_id = {alias_t}.id AND {alias_t}.name = ?"
+                )
                 params.append(tag.strip().lower())
 
         if artist:
@@ -207,8 +222,21 @@ def search_images(
             params.append(f"%{series}%")
 
         if folder_prefix:
-            conditions.append("i.file_path LIKE ?")
-            params.append(f"{folder_prefix}%")
+            # ---------------------------------------------------------------
+            # Fix: normalise BOTH sides of the comparison to forward slashes
+            # so that paths stored as "C:\images\artist\img.jpg" (Windows
+            # os.walk) match a folder_prefix of "C:/images/artist"
+            # (QFileSystemModel on Qt 6 / Windows).
+            #
+            # The trailing '/% ' pattern means:
+            #   • "C:/images/artistA/%"  matches  C:/images/artistA/img.jpg  ✓
+            #   • "C:/images/artistA/%"  does NOT match C:/images/artistABC/img.jpg  ✗
+            # ---------------------------------------------------------------
+            norm = _norm(folder_prefix)
+            conditions.append(
+                "REPLACE(i.file_path, '\\', '/') LIKE ?"
+            )
+            params.append(f"{norm}/%")
 
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
