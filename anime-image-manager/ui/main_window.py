@@ -133,19 +133,22 @@ class MainWindow(QMainWindow):
         action_import.triggered.connect(self._import_library)
 
         view_menu = self.menuBar().addMenu("View")
-        theme_menu = view_menu.addMenu("Theme")
+        theme_menu = view_menu.addMenu("Themes")
         theme_group = QActionGroup(self)
         theme_group.setExclusive(True)
 
         self._theme_actions = {}
-        for label in ("Light", "Dark", "Custom"):
+        for label in (
+            "Light", "Dark", "Gray", "Blue",
+            "Purple", "Green", "Orange", "High Contrast"
+        ):
             action = theme_menu.addAction(label)
             action.setCheckable(True)
             action.triggered.connect(
-                lambda _checked=False, theme_name=label.lower(): self._apply_theme(theme_name)
+                lambda _checked=False, theme_name=label.lower().replace(" ", "-"): self._apply_theme(theme_name)
             )
             theme_group.addAction(action)
-            self._theme_actions[label.lower()] = action
+            self._theme_actions[label.lower().replace(" ", "-")] = action
 
     # ------------------------------------------------------------------
     # Window geometry persistence
@@ -369,7 +372,7 @@ class MainWindow(QMainWindow):
             "Confirm import",
             (
                 "Import will overwrite current data/database.db.\n"
-                "A backup of the current database will be saved as database_backup.db.\n"
+                "Metadata will be replaced from metadata.json in the ZIP.\n"
                 "Images and cache files are not changed.\n\n"
                 "Continue?"
             ),

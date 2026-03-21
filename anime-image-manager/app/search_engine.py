@@ -1,5 +1,5 @@
 """
-Search engine — parses query strings and delegates to the database layer.
+Search engine — parses query strings and applies metadata filters from JSON.
 
 Supported query format:
   tag:catgirl
@@ -9,7 +9,9 @@ Supported query format:
 """
 
 import re
-from app.database import search_images
+
+from app.database import get_all_image_paths
+from app import metadata_manager as mm
 
 
 def parse_query(query: str) -> tuple[list[str], str, str]:
@@ -43,9 +45,30 @@ def execute_search(
     Returns a sorted list of matching file paths.
     """
     tags, artist, series = parse_query(query)
-    return search_images(
-        tags=tags or None,
-        artist=artist,
-        series=series,
-        folder_prefix=folder_prefix
-    )
+    tags = [t.strip().lower() for t in tags if t.strip()]
+    artist = artist.strip().lower()
+    series = series.strip().lower()
+
+    # Start from known image paths. For folder filtering, include filesystem
+    # fallback so search still sees files not yet scanned into DB rows.
+    if folder_prefix:
+        from app.image_scanner import get_images_in_folder
+        candidates = get_images_in_folder(folder_prefix)
+    else:
+        candidates = sorted(get_all_image_paths())
+
+    results: list[str] = []
+    for path in candidates:
+        meta = mm.get_metadata(path)
+
+        if tags:
+            have = {t.lower() for t in meta.get("tags", [])}
+            if not all(tag in have for tag in tags):
+                continue
+        if artist and artist not in str(meta.get("artist", "")).lower():
+            continue
+        if series and series not in str(meta.get("series", "")).lower():
+            continue
+        results.append(path)
+
+    return sorted(results)

@@ -1,0 +1,8 @@
+QMainWindow, QWidget { background:black; color:white; }
+QLineEdit, QTextEdit, QListWidget, QTreeView { background:black; border:2px solid #ffff00; color:white; }
+QListWidget::item:selected, QTreeView::item:selected { background:#ffff00; color:black; }
+QPushButton { background:#ffff00; color:black; border:2px solid white; border-radius:2px; padding:4px 10px; font-weight:700; }
+QPushButton:hover { background:white; color:black; }
+QMenu { background:black; color:white; border:2px solid #ffff00; }
+QMenu::item:selected { background:#ffff00; color:black; }
+QStatusBar { background:black; color:#00ffff; border-top:2px solid #ffff00; }

@@ -13,8 +13,8 @@ Changes in this version
 * Pressing Enter inside an Artist or Series field also triggers the save
   (returnPressed connected to the same handler).
 
-* All saves are wrapped in try/except so database errors (e.g. any
-  unexpected FK issue) are shown in a small status label instead of
+* All saves are wrapped in try/except so metadata save errors are shown
+  in a small status label instead of
   crashing silently.
 
 * The status label auto-clears after 3 seconds so it doesn't clutter the UI.
@@ -242,10 +242,6 @@ class MetadataPanel(QWidget):
     def _on_save_artist(self) -> None:
         """
         Apply button (or Enter) for the Artist field.
-
-        Calls mm.save_artist() which ultimately calls db.set_artist().
-        db.set_artist() upserts any missing image rows first so FK
-        constraints on image_tags can never be violated here.
         """
         if not self._selected_paths:
             return
@@ -263,8 +259,6 @@ class MetadataPanel(QWidget):
     def _on_save_series(self) -> None:
         """
         Apply button (or Enter) for the Series field.
-
-        Same FK-safety guarantee as _on_save_artist.
         """
         if not self._selected_paths:
             return
@@ -282,9 +276,6 @@ class MetadataPanel(QWidget):
     def _on_add_tag(self) -> None:
         """
         Add the comma-separated tags from the input field to all selected images.
-
-        db.add_tags() upserts missing image rows AND creates new tag rows
-        before inserting into image_tags, so FK violations cannot occur.
         """
         if not self._selected_paths:
             return
