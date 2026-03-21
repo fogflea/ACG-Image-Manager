@@ -6,21 +6,17 @@ Supports selection (single and multi), context menus, and double-click to open v
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
-
 from PySide6.QtCore import (
     Qt, Signal, QSize, QRunnable, QThreadPool, QObject, QPoint, QTimer
 )
 from PySide6.QtGui import QPixmap, QIcon, QColor
 from PySide6.QtWidgets import (
     QWidget, QListWidget, QListWidgetItem, QVBoxLayout,
-    QHBoxLayout, QSlider, QLabel, QAbstractItemView, QMenu,
-    QSizePolicy, QApplication
+    QHBoxLayout, QSlider, QLabel, QAbstractItemView, QMenu
 )
 
 from app.thumbnail_cache import get_thumbnail
-from ui.image_viewer import ImageViewer
-
+from app.i18n import i18n
 
 class ThumbnailLoader(QObject):
     """Signal carrier for async thumbnail loading results."""
@@ -60,6 +56,7 @@ class ImageGrid(QWidget):
         self._pool.setMaxThreadCount(4)
         self._pending: set[str] = set()
 
+        i18n.language_changed.connect(self._retranslate_ui)
         self._build_ui()
 
         self._lazy_timer = QTimer(self)
@@ -75,11 +72,12 @@ class ImageGrid(QWidget):
         controls = QHBoxLayout()
         controls.setContentsMargins(4, 4, 4, 4)
 
-        self._count_label = QLabel("0 images")
+        self._count_label = QLabel("0")
         controls.addWidget(self._count_label)
         controls.addStretch()
 
-        controls.addWidget(QLabel("Size:"))
+        self._size_text_label = QLabel()
+        controls.addWidget(self._size_text_label)
         self._slider = QSlider(Qt.Horizontal)
         self._slider.setMinimum(0)
         self._slider.setMaximum(2)
@@ -112,6 +110,12 @@ class ImageGrid(QWidget):
         layout.addWidget(self._list)
 
         self._update_icon_size()
+        self._retranslate_ui()
+
+
+    def _retranslate_ui(self, _lang: str | None = None) -> None:
+        self._size_text_label.setText(i18n.tr("grid.size"))
+        self._count_label.setText(i18n.tr("grid.images_count", count=self._list.count()))
 
     def _on_size_changed(self, value: int) -> None:
         sizes = [64, 128, 256]
@@ -143,7 +147,7 @@ class ImageGrid(QWidget):
             self._list.addItem(item)
             self._item_map[path] = item
 
-        self._count_label.setText(f"{len(paths)} image(s)")
+        self._count_label.setText(i18n.tr("grid.images_count", count=len(paths)))
 
     # Alias used by FolderFilterThread.results_ready signal connection
     def load_images(self, paths: list[str]) -> None:
@@ -221,10 +225,10 @@ class ImageGrid(QWidget):
 
         menu = QMenu(self)
 
-        act_view = menu.addAction("Open Image Viewer")
+        act_view = menu.addAction(i18n.tr("grid.open_default"))
         act_view.triggered.connect(lambda: self._open_viewer(selected, path))
 
-        act_explore = menu.addAction("Show in Explorer")
+        act_explore = menu.addAction(i18n.tr("grid.show_explorer"))
         act_explore.triggered.connect(lambda: self._show_in_explorer(path))
 
         menu.exec(self._list.viewport().mapToGlobal(pos))
