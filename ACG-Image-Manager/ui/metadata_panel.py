@@ -1,34 +1,14 @@
-"""
-Metadata editor panel — displayed on the right side.
-Shows and edits tags, artist, series, description for selected image(s).
-Supports batch editing when multiple images are selected.
-
-Changes in this version
-------------------------
-* Artist and Series fields now each have an explicit "Apply" button.
-  The old editingFinished approach was unreliable for batch edits because
-  focus changes while tabbing through a multi-selection would silently
-  fire partial saves.  An explicit button makes the intent unambiguous.
-
-* Pressing Enter inside an Artist or Series field also triggers the save
-  (returnPressed connected to the same handler).
-
-* All saves are wrapped in try/except so metadata save errors are shown
-  in a small status label instead of
-  crashing silently.
-
-* The status label auto-clears after 3 seconds so it doesn't clutter the UI.
-"""
-
 from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtGui import QStringListModel
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QTextEdit, QPushButton,
     QFrame, QListWidget, QListWidgetItem,
-    QAbstractItemView
+    QAbstractItemView, QCompleter, QMessageBox, QInputDialog
 )
 
 from app import metadata_manager as mm
+from app.i18n import i18n
 
 
 class MetadataPanel(QWidget):
@@ -37,27 +17,25 @@ class MetadataPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._selected_paths: list[str] = []
-        # Timer to auto-clear the status label
         self._status_clear_timer = QTimer(self)
         self._status_clear_timer.setSingleShot(True)
         self._status_clear_timer.setInterval(3000)
         self._status_clear_timer.timeout.connect(self._clear_status)
-        self._build_ui()
 
-    # ------------------------------------------------------------------
-    # UI construction
-    # ------------------------------------------------------------------
+        self._artist_model = QStringListModel([])
+        self._series_model = QStringListModel([])
+        self._tag_model = QStringListModel([])
+
+        i18n.language_changed.connect(self._retranslate_ui)
+        self._build_ui()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
 
-        # Header — shows filename or "N images selected"
-        self._header = QLabel("No image selected")
-        self._header.setStyleSheet(
-            "font-weight: bold; font-size: 13px; padding-bottom: 4px;"
-        )
+        self._header = QLabel()
+        self._header.setStyleSheet("font-weight: bold; font-size: 13px; padding-bottom: 4px;")
         self._header.setWordWrap(True)
         layout.addWidget(self._header)
 
@@ -66,43 +44,42 @@ class MetadataPanel(QWidget):
         sep.setFrameShadow(QFrame.Sunken)
         layout.addWidget(sep)
 
-        # ---- Artist ----
-        layout.addWidget(QLabel("Artist:"))
+        self._lbl_artist = QLabel()
+        layout.addWidget(self._lbl_artist)
         artist_row = QHBoxLayout()
         self._artist_edit = QLineEdit()
-        self._artist_edit.setPlaceholderText("e.g. SomeArtist")
-        # Enter key in the field also saves
         self._artist_edit.returnPressed.connect(self._on_save_artist)
         artist_row.addWidget(self._artist_edit)
+        self._artist_completer = QCompleter(self._artist_model, self)
+        self._artist_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._artist_completer.setFilterMode(Qt.MatchContains)
+        self._artist_edit.setCompleter(self._artist_completer)
 
-        self._btn_save_artist = QPushButton("Apply")
-        self._btn_save_artist.setFixedWidth(50)
-        self._btn_save_artist.setToolTip(
-            "Save artist to all selected images (also: press Enter)"
-        )
+        self._btn_save_artist = QPushButton()
+        self._btn_save_artist.setFixedWidth(60)
         self._btn_save_artist.clicked.connect(self._on_save_artist)
         artist_row.addWidget(self._btn_save_artist)
         layout.addLayout(artist_row)
 
-        # ---- Series ----
-        layout.addWidget(QLabel("Series:"))
+        self._lbl_series = QLabel()
+        layout.addWidget(self._lbl_series)
         series_row = QHBoxLayout()
         self._series_edit = QLineEdit()
-        self._series_edit.setPlaceholderText("e.g. Re:Zero")
         self._series_edit.returnPressed.connect(self._on_save_series)
         series_row.addWidget(self._series_edit)
+        self._series_completer = QCompleter(self._series_model, self)
+        self._series_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._series_completer.setFilterMode(Qt.MatchContains)
+        self._series_edit.setCompleter(self._series_completer)
 
-        self._btn_save_series = QPushButton("Apply")
-        self._btn_save_series.setFixedWidth(50)
-        self._btn_save_series.setToolTip(
-            "Save series to all selected images (also: press Enter)"
-        )
+        self._btn_save_series = QPushButton()
+        self._btn_save_series.setFixedWidth(60)
         self._btn_save_series.clicked.connect(self._on_save_series)
         series_row.addWidget(self._btn_save_series)
         layout.addLayout(series_row)
 
-        # ---- Tags ----
-        layout.addWidget(QLabel("Tags:"))
+        self._lbl_tags = QLabel()
+        layout.addWidget(self._lbl_tags)
 
         self._tags_list = QListWidget()
         self._tags_list.setFixedHeight(90)
@@ -111,54 +88,94 @@ class MetadataPanel(QWidget):
 
         tag_row = QHBoxLayout()
         self._tag_input = QLineEdit()
-        self._tag_input.setPlaceholderText("tag1, tag2, ...")
         self._tag_input.returnPressed.connect(self._on_add_tag)
         tag_row.addWidget(self._tag_input)
+        self._tag_completer = QCompleter(self._tag_model, self)
+        self._tag_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._tag_completer.setFilterMode(Qt.MatchContains)
+        self._tag_input.setCompleter(self._tag_completer)
 
-        btn_add = QPushButton("Add")
-        btn_add.setFixedWidth(44)
-        btn_add.clicked.connect(self._on_add_tag)
-        tag_row.addWidget(btn_add)
+        self._btn_add = QPushButton()
+        self._btn_add.setFixedWidth(50)
+        self._btn_add.clicked.connect(self._on_add_tag)
+        tag_row.addWidget(self._btn_add)
 
-        btn_remove = QPushButton("Remove")
-        btn_remove.setFixedWidth(58)
-        btn_remove.setToolTip("Remove selected tag(s) from all selected images")
-        btn_remove.clicked.connect(self._on_remove_selected_tags)
-        tag_row.addWidget(btn_remove)
-
+        self._btn_remove = QPushButton()
+        self._btn_remove.setFixedWidth(70)
+        self._btn_remove.clicked.connect(self._on_remove_selected_tags)
+        tag_row.addWidget(self._btn_remove)
         layout.addLayout(tag_row)
 
-        # ---- Description ----
-        layout.addWidget(QLabel("Description:"))
+        self._lbl_description = QLabel()
+        layout.addWidget(self._lbl_description)
         self._desc_edit = QTextEdit()
-        self._desc_edit.setPlaceholderText("Optional description...")
         self._desc_edit.setFixedHeight(75)
-        # Auto-save description on focus-out (single image only)
         self._desc_edit.focusOutEvent = self._desc_focus_lost
         layout.addWidget(self._desc_edit)
 
-        # ---- Status label (error / success feedback) ----
+        self._batch_label = QLabel()
+        self._batch_label.setStyleSheet("font-weight: bold; padding-top: 4px;")
+        layout.addWidget(self._batch_label)
+        batch_row = QHBoxLayout()
+        self._btn_batch_remove_tags = QPushButton()
+        self._btn_batch_remove_tags.clicked.connect(self._on_batch_remove_tags)
+        batch_row.addWidget(self._btn_batch_remove_tags)
+
+        self._btn_batch_clear_artist = QPushButton()
+        self._btn_batch_clear_artist.clicked.connect(self._on_batch_clear_artist)
+        batch_row.addWidget(self._btn_batch_clear_artist)
+
+        self._btn_batch_clear_series = QPushButton()
+        self._btn_batch_clear_series.clicked.connect(self._on_batch_clear_series)
+        batch_row.addWidget(self._btn_batch_clear_series)
+
+        self._btn_batch_clear_desc = QPushButton()
+        self._btn_batch_clear_desc.clicked.connect(self._on_batch_clear_desc)
+        batch_row.addWidget(self._btn_batch_clear_desc)
+        layout.addLayout(batch_row)
+
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
-        self._status_label.setStyleSheet("font-size: 11px; color: #a6e3a1;")  # green
+        self._status_label.setStyleSheet("font-size: 11px; color: #a6e3a1;")
         layout.addWidget(self._status_label)
 
         layout.addStretch()
-
-        # Start disabled
+        self._retranslate_ui()
         self._set_enabled(False)
+        self.refresh_suggestions()
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    def _retranslate_ui(self, _lang: str | None = None) -> None:
+        self._lbl_artist.setText(i18n.tr("metadata.artist"))
+        self._lbl_series.setText(i18n.tr("metadata.series"))
+        self._lbl_tags.setText(i18n.tr("metadata.tags"))
+        self._lbl_description.setText(i18n.tr("metadata.description"))
+        self._btn_save_artist.setText(i18n.tr("metadata.apply"))
+        self._btn_save_series.setText(i18n.tr("metadata.apply"))
+        self._btn_add.setText(i18n.tr("metadata.add"))
+        self._btn_remove.setText(i18n.tr("metadata.remove"))
+        self._batch_label.setText(i18n.tr("metadata.batch_tools"))
+        self._btn_batch_remove_tags.setText(i18n.tr("metadata.remove_tags"))
+        self._btn_batch_clear_artist.setText(i18n.tr("metadata.clear_artist"))
+        self._btn_batch_clear_series.setText(i18n.tr("metadata.clear_series"))
+        self._btn_batch_clear_desc.setText(i18n.tr("metadata.clear_description"))
+        self._artist_edit.setPlaceholderText(i18n.tr("metadata.artist_ph"))
+        self._series_edit.setPlaceholderText(i18n.tr("metadata.series_ph"))
+        self._tag_input.setPlaceholderText(i18n.tr("metadata.tags_ph"))
+        self._desc_edit.setPlaceholderText(i18n.tr("metadata.desc_ph"))
+        if not self._selected_paths:
+            self._header.setText(i18n.tr("metadata.none"))
+
+    def refresh_suggestions(self) -> None:
+        self._artist_model.setStringList(mm.all_artists())
+        self._series_model.setStringList(mm.all_series())
+        self._tag_model.setStringList(mm.all_tags())
 
     def load_selection(self, paths: list[str]) -> None:
-        """Populate all fields from the selected image(s)."""
         self._selected_paths = paths
         self._clear_status()
 
         if not paths:
-            self._header.setText("No image selected")
+            self._header.setText(i18n.tr("metadata.none"))
             self._artist_edit.clear()
             self._series_edit.clear()
             self._tags_list.clear()
@@ -175,42 +192,28 @@ class MetadataPanel(QWidget):
             self._artist_edit.setText(meta.get("artist", ""))
             self._series_edit.setText(meta.get("series", ""))
             self._desc_edit.setPlainText(meta.get("description", ""))
+            self._desc_edit.setPlaceholderText(i18n.tr("metadata.desc_ph"))
             self._populate_tags(meta.get("tags", []))
         else:
-            self._header.setText(f"{len(paths)} images selected")
-
+            self._header.setText(i18n.tr("metadata.multi", count=len(paths)))
             all_tags: set[str] = set()
-            artists:  set[str] = set()
+            artists: set[str] = set()
             series_s: set[str] = set()
-
             for p in paths:
                 meta = mm.get_metadata(p)
                 all_tags.update(meta.get("tags", []))
-                a = meta.get("artist", "")
-                if a:
-                    artists.add(a)
-                s = meta.get("series", "")
-                if s:
-                    series_s.add(s)
+                if meta.get("artist", ""):
+                    artists.add(meta.get("artist"))
+                if meta.get("series", ""):
+                    series_s.add(meta.get("series"))
 
-            # Show the shared value if all images agree; otherwise blank
-            self._artist_edit.setText(artists.pop() if len(artists) == 1 else "")
-            self._artist_edit.setPlaceholderText(
-                "— multiple values —" if len(artists) > 1 else "e.g. SomeArtist"
-            )
-            self._series_edit.setText(series_s.pop() if len(series_s) == 1 else "")
-            self._series_edit.setPlaceholderText(
-                "— multiple values —" if len(series_s) > 1 else "e.g. Re:Zero"
-            )
+            self._artist_edit.setText(next(iter(artists)) if len(artists) == 1 else "")
+            self._artist_edit.setPlaceholderText(i18n.tr("metadata.multi_values") if len(artists) > 1 else i18n.tr("metadata.artist_ph"))
+            self._series_edit.setText(next(iter(series_s)) if len(series_s) == 1 else "")
+            self._series_edit.setPlaceholderText(i18n.tr("metadata.multi_values") if len(series_s) > 1 else i18n.tr("metadata.series_ph"))
             self._desc_edit.clear()
-            self._desc_edit.setPlaceholderText(
-                "(description editing not available in batch mode)"
-            )
+            self._desc_edit.setPlaceholderText(i18n.tr("metadata.batch_desc_ph"))
             self._populate_tags(sorted(all_tags))
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     def _populate_tags(self, tags: list[str]) -> None:
         self._tags_list.clear()
@@ -221,13 +224,15 @@ class MetadataPanel(QWidget):
         for w in [
             self._artist_edit, self._btn_save_artist,
             self._series_edit, self._btn_save_series,
-            self._tag_input,   self._desc_edit, self._tags_list,
+            self._tag_input, self._desc_edit, self._tags_list,
+            self._btn_add, self._btn_remove,
+            self._btn_batch_remove_tags, self._btn_batch_clear_artist,
+            self._btn_batch_clear_series, self._btn_batch_clear_desc,
         ]:
             w.setEnabled(enabled)
 
     def _show_status(self, message: str, is_error: bool = False) -> None:
-        """Display a brief status message that auto-clears after 3 s."""
-        colour = "#f38ba8" if is_error else "#a6e3a1"   # red or green
+        colour = "#f38ba8" if is_error else "#a6e3a1"
         self._status_label.setStyleSheet(f"font-size: 11px; color: {colour};")
         self._status_label.setText(message)
         self._status_clear_timer.start()
@@ -235,48 +240,40 @@ class MetadataPanel(QWidget):
     def _clear_status(self) -> None:
         self._status_label.setText("")
 
-    # ------------------------------------------------------------------
-    # Save handlers — each wrapped in try/except for safe error display
-    # ------------------------------------------------------------------
+    def _confirm(self, message: str) -> bool:
+        return QMessageBox.question(
+            self,
+            i18n.tr("confirm.title"),
+            message,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        ) == QMessageBox.Yes
 
     def _on_save_artist(self) -> None:
-        """
-        Apply button (or Enter) for the Artist field.
-        """
         if not self._selected_paths:
             return
         artist = self._artist_edit.text().strip()
         try:
             mm.save_artist(self._selected_paths, artist)
-            n = len(self._selected_paths)
-            self._show_status(
-                f"Artist saved to {n} image{'s' if n != 1 else ''}."
-            )
+            self.refresh_suggestions()
+            self._show_status(i18n.tr("status.artist_saved", count=len(self._selected_paths)))
             self.metadata_changed.emit()
         except Exception as exc:
             self._show_status(f"Error saving artist: {exc}", is_error=True)
 
     def _on_save_series(self) -> None:
-        """
-        Apply button (or Enter) for the Series field.
-        """
         if not self._selected_paths:
             return
         series = self._series_edit.text().strip()
         try:
             mm.save_series(self._selected_paths, series)
-            n = len(self._selected_paths)
-            self._show_status(
-                f"Series saved to {n} image{'s' if n != 1 else ''}."
-            )
+            self.refresh_suggestions()
+            self._show_status(i18n.tr("status.series_saved", count=len(self._selected_paths)))
             self.metadata_changed.emit()
         except Exception as exc:
             self._show_status(f"Error saving series: {exc}", is_error=True)
 
     def _on_add_tag(self) -> None:
-        """
-        Add the comma-separated tags from the input field to all selected images.
-        """
         if not self._selected_paths:
             return
         raw = self._tag_input.text()
@@ -286,34 +283,75 @@ class MetadataPanel(QWidget):
         try:
             mm.add_tags_to_images(self._selected_paths, tags)
             self._tag_input.clear()
+            self.refresh_suggestions()
             self.load_selection(self._selected_paths)
-            self._show_status(
-                f"Added {len(tags)} tag{'s' if len(tags) != 1 else ''}."
-            )
+            self._show_status(i18n.tr("status.tags_added", count=len(tags)))
             self.metadata_changed.emit()
         except Exception as exc:
             self._show_status(f"Error adding tags: {exc}", is_error=True)
 
     def _on_remove_selected_tags(self) -> None:
-        """Remove all selected tags (in the list widget) from selected images."""
         if not self._selected_paths:
             return
         selected_items = self._tags_list.selectedItems()
         if not selected_items:
             return
         tags = [item.text() for item in selected_items]
+        if not self._confirm(i18n.tr("confirm.remove_tags", count=len(self._selected_paths), tags=", ".join(tags))):
+            return
         try:
             mm.remove_tags_from_images(self._selected_paths, tags)
+            self.refresh_suggestions()
             self.load_selection(self._selected_paths)
-            self._show_status(
-                f"Removed {len(tags)} tag{'s' if len(tags) != 1 else ''}."
-            )
+            self._show_status(i18n.tr("status.tags_removed", count=len(tags)))
             self.metadata_changed.emit()
         except Exception as exc:
             self._show_status(f"Error removing tags: {exc}", is_error=True)
 
+    def _on_batch_remove_tags(self) -> None:
+        if not self._selected_paths:
+            return
+        text, ok = QInputDialog.getText(
+            self,
+            i18n.tr("input.remove_tags_title"),
+            i18n.tr("input.remove_tags_label"),
+        )
+        if not ok:
+            return
+        tags = [t.strip().lower() for t in text.split(",") if t.strip()]
+        if not tags:
+            return
+        if not self._confirm(i18n.tr("confirm.remove_tags", count=len(self._selected_paths), tags=", ".join(tags))):
+            return
+        mm.remove_tags_from_images(self._selected_paths, tags)
+        self.refresh_suggestions()
+        self.load_selection(self._selected_paths)
+        self._show_status(i18n.tr("status.tags_removed", count=len(tags)))
+        self.metadata_changed.emit()
+
+    def _on_batch_clear_artist(self) -> None:
+        if self._selected_paths and self._confirm(i18n.tr("confirm.clear_artist", count=len(self._selected_paths))):
+            mm.save_artist(self._selected_paths, "")
+            self.load_selection(self._selected_paths)
+            self._show_status(i18n.tr("status.artist_cleared", count=len(self._selected_paths)))
+            self.metadata_changed.emit()
+
+    def _on_batch_clear_series(self) -> None:
+        if self._selected_paths and self._confirm(i18n.tr("confirm.clear_series", count=len(self._selected_paths))):
+            mm.save_series(self._selected_paths, "")
+            self.load_selection(self._selected_paths)
+            self._show_status(i18n.tr("status.series_cleared", count=len(self._selected_paths)))
+            self.metadata_changed.emit()
+
+    def _on_batch_clear_desc(self) -> None:
+        if self._selected_paths and self._confirm(i18n.tr("confirm.clear_description", count=len(self._selected_paths))):
+            for path in self._selected_paths:
+                mm.save_description(path, "")
+            self.load_selection(self._selected_paths)
+            self._show_status(i18n.tr("status.description_cleared", count=len(self._selected_paths)))
+            self.metadata_changed.emit()
+
     def _desc_focus_lost(self, event) -> None:
-        """Auto-save description when the text area loses focus (single image only)."""
         if len(self._selected_paths) == 1:
             text = self._desc_edit.toPlainText()
             try:

@@ -47,3 +47,8 @@
 - Thumbnails are cached in `cache/thumbnails/` and regenerated automatically if missing.
 - The database is in `data/database.db` — back this up to preserve your tags.
 - Images are scanned from the `images/` subfolder recursively on every Refresh.
+
+
+### Theme packaging note
+
+The PyInstaller spec includes the full `themes/` directory in `datas`, and runtime theme loading supports `sys._MEIPASS/themes` in bundled mode.

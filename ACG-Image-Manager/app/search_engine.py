@@ -1,12 +1,4 @@
-"""
-Search engine — parses query strings and applies metadata filters from JSON.
-
-Supported query format:
-  tag:catgirl
-  artist:SomeArtist
-  series:ReZero
-  tag:maid tag:catgirl artist:xxx
-"""
+"""Search engine with inclusion and exclusion metadata filters."""
 
 import re
 
@@ -14,43 +6,49 @@ from app.database import get_all_image_paths
 from app import metadata_manager as mm
 
 
-def parse_query(query: str) -> tuple[list[str], str, str]:
+def parse_query(query: str) -> tuple[list[str], list[str], str, str, str, str]:
     """
-    Parse a query string and return (tags, artist, series).
+    Parse a query string.
+    Returns (include_tags, exclude_tags, include_artist, exclude_artist, include_series, exclude_series)
     """
-    tags: list[str] = []
-    artist: str = ""
-    series: str = ""
+    include_tags: list[str] = []
+    exclude_tags: list[str] = []
+    include_artist = ""
+    exclude_artist = ""
+    include_series = ""
+    exclude_series = ""
 
-    pattern = re.compile(r'(tag|artist|series):("([^"]+)"|(\S+))', re.IGNORECASE)
+    pattern = re.compile(r'(-?)(tag|artist|series):("([^"]+)"|(\S+))', re.IGNORECASE)
     for match in pattern.finditer(query):
-        prefix = match.group(1).lower()
-        value = (match.group(3) or match.group(4)).strip()
+        is_exclude = bool(match.group(1))
+        prefix = match.group(2).lower()
+        value = (match.group(4) or match.group(5) or "").strip()
+
         if prefix == "tag":
-            tags.append(value)
+            (exclude_tags if is_exclude else include_tags).append(value)
         elif prefix == "artist":
-            artist = value
+            if is_exclude:
+                exclude_artist = value
+            else:
+                include_artist = value
         elif prefix == "series":
-            series = value
+            if is_exclude:
+                exclude_series = value
+            else:
+                include_series = value
 
-    return tags, artist, series
+    return include_tags, exclude_tags, include_artist, exclude_artist, include_series, exclude_series
 
 
-def execute_search(
-    query: str,
-    folder_prefix: str = ""
-) -> list[str]:
-    """
-    Execute a search given a raw query string and an optional folder prefix filter.
-    Returns a sorted list of matching file paths.
-    """
-    tags, artist, series = parse_query(query)
-    tags = [t.strip().lower() for t in tags if t.strip()]
-    artist = artist.strip().lower()
-    series = series.strip().lower()
+def execute_search(query: str, folder_prefix: str = "") -> list[str]:
+    include_tags, exclude_tags, include_artist, exclude_artist, include_series, exclude_series = parse_query(query)
+    include_tags = [t.strip().lower() for t in include_tags if t.strip()]
+    exclude_tags = [t.strip().lower() for t in exclude_tags if t.strip()]
+    include_artist = include_artist.strip().lower()
+    exclude_artist = exclude_artist.strip().lower()
+    include_series = include_series.strip().lower()
+    exclude_series = exclude_series.strip().lower()
 
-    # Start from known image paths. For folder filtering, include filesystem
-    # fallback so search still sees files not yet scanned into DB rows.
     if folder_prefix:
         from app.image_scanner import get_images_in_folder
         candidates = get_images_in_folder(folder_prefix)
@@ -60,15 +58,25 @@ def execute_search(
     results: list[str] = []
     for path in candidates:
         meta = mm.get_metadata(path)
+        have = {t.lower() for t in meta.get("tags", [])}
+        artist = str(meta.get("artist", "")).lower()
+        series = str(meta.get("series", "")).lower()
 
-        if tags:
-            have = {t.lower() for t in meta.get("tags", [])}
-            if not all(tag in have for tag in tags):
-                continue
-        if artist and artist not in str(meta.get("artist", "")).lower():
+        if include_tags and not all(tag in have for tag in include_tags):
             continue
-        if series and series not in str(meta.get("series", "")).lower():
+        if exclude_tags and any(tag in have for tag in exclude_tags):
             continue
+
+        if include_artist and include_artist not in artist:
+            continue
+        if exclude_artist and exclude_artist in artist:
+            continue
+
+        if include_series and include_series not in series:
+            continue
+        if exclude_series and exclude_series in series:
+            continue
+
         results.append(path)
 
     return sorted(results)
