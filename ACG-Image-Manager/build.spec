@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# PyInstaller spec file for Anime Image Manager
+# PyInstaller spec file for ACG-Image-Manager
 # Build with: pyinstaller build.spec
 
 import sys
