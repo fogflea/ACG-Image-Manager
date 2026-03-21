@@ -21,7 +21,7 @@
 
 ### Steps
 
-1. Open a command prompt in the `anime-image-manager/` folder.
+1. Open a command prompt in the `ACG-Image-Manager/` folder.
 
 2. Run PyInstaller:
    ```

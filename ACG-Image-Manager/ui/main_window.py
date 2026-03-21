@@ -16,14 +16,20 @@ Key changes in this version
   the center grid can never be hidden.
 """
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QTimer, QSettings
+from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QSplitter,
-    QStatusBar, QProgressBar, QLabel
+    QStatusBar, QProgressBar, QLabel,
+    QFileDialog, QMessageBox
 )
 
 from app.database import get_all_image_paths
 from app.image_scanner import ScannerThread, FolderFilterThread
+from app.library_exporter import export_library_zip
+from app.library_importer import import_library_zip
 from ui.folder_tree import FolderTree
 from ui.image_grid import ImageGrid
 from ui.metadata_panel import MetadataPanel
@@ -34,6 +40,8 @@ _SETTINGS_ORG  = "AnimeImageManager"
 _SETTINGS_APP  = "MainWindow"
 _KEY_GEOMETRY  = "geometry"
 _KEY_SPLITTER  = "splitter_sizes"
+_KEY_THEME     = "theme"
+_THEMES_DIR    = Path(__file__).resolve().parent.parent / "themes"
 
 
 class MainWindow(QMainWindow):
@@ -51,7 +59,8 @@ class MainWindow(QMainWindow):
         self._filter_thread: FolderFilterThread = None
 
         self._build_ui()
-        self._apply_dark_style()
+        self._build_menu()
+        self._load_saved_theme()
         self._restore_geometry()
         self._start_initial_scan()
 
@@ -114,6 +123,33 @@ class MainWindow(QMainWindow):
         self._progress.setVisible(False)
         status_bar.addPermanentWidget(self._progress)
 
+    def _build_menu(self) -> None:
+        file_menu = self.menuBar().addMenu("File")
+
+        action_export = file_menu.addAction("Export Library")
+        action_export.triggered.connect(self._export_library)
+
+        action_import = file_menu.addAction("Import Library")
+        action_import.triggered.connect(self._import_library)
+
+        view_menu = self.menuBar().addMenu("View")
+        theme_menu = view_menu.addMenu("Themes")
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+
+        self._theme_actions = {}
+        for label in (
+            "Light", "Dark", "Gray", "Blue",
+            "Purple", "Green", "Orange", "High Contrast"
+        ):
+            action = theme_menu.addAction(label)
+            action.setCheckable(True)
+            action.triggered.connect(
+                lambda _checked=False, theme_name=label.lower().replace(" ", "-"): self._apply_theme(theme_name)
+            )
+            theme_group.addAction(action)
+            self._theme_actions[label.lower().replace(" ", "-")] = action
+
     # ------------------------------------------------------------------
     # Window geometry persistence
     # ------------------------------------------------------------------
@@ -151,104 +187,26 @@ class MainWindow(QMainWindow):
     # Dark stylesheet
     # ------------------------------------------------------------------
 
-    def _apply_dark_style(self) -> None:
-        self.setStyleSheet("""
-            QMainWindow, QWidget {
-                background-color: #1e1e2e;
-                color: #cdd6f4;
-            }
-            QSplitter::handle {
-                background: #313244;
-            }
-            QSplitter::handle:hover {
-                background: #585b70;
-            }
-            QLineEdit, QTextEdit {
-                background: #313244;
-                border: 1px solid #45475a;
-                border-radius: 4px;
-                padding: 4px;
-                color: #cdd6f4;
-            }
-            QListWidget {
-                background: #181825;
-                border: 1px solid #313244;
-                color: #cdd6f4;
-            }
-            QListWidget::item:selected {
-                background: #45475a;
-            }
-            QPushButton {
-                background: #45475a;
-                border: none;
-                border-radius: 4px;
-                padding: 4px 10px;
-                color: #cdd6f4;
-            }
-            QPushButton:hover {
-                background: #585b70;
-            }
-            QPushButton:pressed {
-                background: #313244;
-            }
-            QTreeView {
-                background: #181825;
-                border: none;
-                color: #cdd6f4;
-            }
-            QTreeView::item:hover {
-                background: #313244;
-            }
-            QTreeView::item:selected {
-                background: #45475a;
-            }
-            QTabWidget::pane {
-                border: 1px solid #313244;
-            }
-            QTabBar::tab {
-                background: #313244;
-                color: #cdd6f4;
-                padding: 6px 14px;
-            }
-            QTabBar::tab:selected {
-                background: #45475a;
-            }
-            QScrollBar:vertical {
-                background: #1e1e2e;
-                width: 10px;
-            }
-            QScrollBar::handle:vertical {
-                background: #45475a;
-                border-radius: 5px;
-            }
-            QStatusBar {
-                background: #181825;
-                color: #6c7086;
-            }
-            QLabel {
-                color: #cdd6f4;
-            }
-            QToolBar {
-                background: #181825;
-                border-bottom: 1px solid #313244;
-                spacing: 4px;
-            }
-            QToolButton {
-                color: #cdd6f4;
-                padding: 4px 8px;
-            }
-            QToolButton:hover {
-                background: #313244;
-            }
-            QMenu {
-                background: #313244;
-                color: #cdd6f4;
-                border: 1px solid #45475a;
-            }
-            QMenu::item:selected {
-                background: #45475a;
-            }
-        """)
+    def _load_saved_theme(self) -> None:
+        theme_name = str(self._settings().value(_KEY_THEME, "light")).lower()
+        self._apply_theme(theme_name)
+
+    def _apply_theme(self, theme_name: str) -> None:
+        """
+        Apply a QSS theme from ./themes and persist the preference.
+        """
+        theme_file = _THEMES_DIR / f"{theme_name}.qss"
+        if not theme_file.exists():
+            theme_name = "light"
+            theme_file = _THEMES_DIR / "light.qss"
+
+        qss = theme_file.read_text(encoding="utf-8")
+        self.setStyleSheet(qss)
+        self._settings().setValue(_KEY_THEME, theme_name)
+
+        action = self._theme_actions.get(theme_name)
+        if action:
+            action.setChecked(True)
 
     # ------------------------------------------------------------------
     # DB / filesystem sync (ScannerThread)
@@ -276,6 +234,7 @@ class MainWindow(QMainWindow):
         # Re-apply current folder + query so the grid shows correct results
         self._trigger_filter()
         self._folder_tree.refresh()
+        self._search_bar.refresh_picker_data()
 
     # ------------------------------------------------------------------
     # Non-blocking grid filter (FolderFilterThread)
@@ -361,6 +320,7 @@ class MainWindow(QMainWindow):
         selected = self._image_grid.get_selected_paths()
         if selected:
             self._metadata_panel.load_selection(selected)
+        self._search_bar.refresh_picker_data()
 
     def _open_viewer(self, paths: list[str], index: int) -> None:
         viewer = ImageViewer(paths, start_index=index, parent=self)
@@ -376,3 +336,68 @@ class MainWindow(QMainWindow):
 
     def _hide_loading(self) -> None:
         self._progress.setVisible(False)
+
+    # ------------------------------------------------------------------
+    # Import / Export actions
+    # ------------------------------------------------------------------
+
+    def _export_library(self) -> None:
+        target, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Library",
+            "library-export.zip",
+            "ZIP files (*.zip)",
+        )
+        if not target:
+            return
+
+        try:
+            export_library_zip(Path(target))
+            self.statusBar().showMessage(f"Library exported to {target}", 5000)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+
+    def _import_library(self) -> None:
+        source, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Library",
+            "",
+            "ZIP files (*.zip)",
+        )
+        if not source:
+            return
+
+        answer = QMessageBox.warning(
+            self,
+            "Confirm import",
+            (
+                "Import will overwrite current data/database.db.\n"
+                "Metadata will be replaced from metadata.json in the ZIP.\n"
+                "Images and cache files are not changed.\n\n"
+                "Continue?"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            self._wait_for_background_tasks()
+            import_library_zip(Path(source))
+            self._start_scan()
+            self._folder_tree.refresh()
+            self._trigger_filter()
+            QMessageBox.information(self, "Import complete", "Library import finished.")
+        except Exception as exc:
+            QMessageBox.critical(self, "Import failed", str(exc))
+
+    def _wait_for_background_tasks(self) -> None:
+        """
+        Wait for scanner/filter threads to finish so they can't hold DB locks
+        during import replacement.
+        """
+        if self._scanner and self._scanner.isRunning():
+            self._scanner.wait(5000)
+        if self._filter_thread and self._filter_thread.isRunning():
+            self._filter_thread.wait(5000)

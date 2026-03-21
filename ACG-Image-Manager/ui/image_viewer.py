@@ -1,16 +1,36 @@
 """
-Full-screen image viewer dialog.
-Supports zoom, fit-to-window, previous/next navigation, and keyboard shortcuts.
+Full-screen image viewer using QGraphicsView/QGraphicsScene.
+
+- Wheel zoom (cursor-centered)
+- Drag-to-pan (ScrollHandDrag)
+- No image reload on zoom (transform-only)
 """
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QPixmap, QTransform, QKeyEvent, QWheelEvent, QAction
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QKeyEvent, QPixmap, QWheelEvent
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QScrollArea, QWidget, QToolBar, QSizePolicy
+    QDialog, QVBoxLayout, QLabel, QToolBar,
+    QSizePolicy, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
 )
+
+
+class ZoomableGraphicsView(QGraphicsView):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
+        self.setRenderHints(self.renderHints())
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        factor = 1.15
+        if event.angleDelta().y() > 0:
+            self.scale(factor, factor)
+        elif event.angleDelta().y() < 0:
+            self.scale(1 / factor, 1 / factor)
+        event.accept()
 
 
 class ImageViewer(QDialog):
@@ -18,13 +38,16 @@ class ImageViewer(QDialog):
         super().__init__(parent)
         self.image_paths = image_paths
         self.current_index = start_index
-        self._zoom_factor = 1.0
-        self._fit_mode = True
+        self._scale_factor = 1.0
 
         self.setWindowTitle("Image Viewer")
         self.setMinimumSize(800, 600)
         self.resize(1100, 750)
-        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
+
+        self._scene = QGraphicsScene(self)
+        self._pix_item = QGraphicsPixmapItem()
+        self._scene.addItem(self._pix_item)
+        self._pixmap_cache: dict[str, QPixmap] = {}
 
         self._build_ui()
         self._load_current()
@@ -48,13 +71,6 @@ class ImageViewer(QDialog):
         toolbar.addAction(act_next)
 
         toolbar.addSeparator()
-
-        act_fit = QAction("Fit Window", self)
-        act_fit.setCheckable(True)
-        act_fit.setChecked(True)
-        act_fit.triggered.connect(self._toggle_fit)
-        self._act_fit = act_fit
-        toolbar.addAction(act_fit)
 
         act_zoom_in = QAction("Zoom In (+)", self)
         act_zoom_in.setShortcut("+")
@@ -85,53 +101,36 @@ class ImageViewer(QDialog):
 
         layout.addWidget(toolbar)
 
-        self._scroll = QScrollArea()
-        self._scroll.setAlignment(Qt.AlignCenter)
-        self._scroll.setWidgetResizable(False)
-        self._scroll.setStyleSheet("background: #1a1a1a;")
+        self._view = ZoomableGraphicsView(self)
+        self._view.setScene(self._scene)
+        self._view.setStyleSheet("background: #111; border: none;")
+        layout.addWidget(self._view)
 
-        self._img_label = QLabel()
-        self._img_label.setAlignment(Qt.AlignCenter)
-        self._img_label.setStyleSheet("background: #1a1a1a;")
-        self._scroll.setWidget(self._img_label)
-
-        layout.addWidget(self._scroll)
+    def _get_pixmap(self, path: str) -> QPixmap:
+        if path not in self._pixmap_cache:
+            self._pixmap_cache[path] = QPixmap(path)
+        return self._pixmap_cache[path]
 
     def _load_current(self) -> None:
         if not self.image_paths:
             return
+
         path = self.image_paths[self.current_index]
-        self._pixmap = QPixmap(path)
-        self._zoom_factor = 1.0
-        self._fit_mode = self._act_fit.isChecked()
+        pixmap = self._get_pixmap(path)
+
+        if pixmap.isNull():
+            self._title_label.setText("Cannot load image")
+            self._pix_item.setPixmap(QPixmap())
+            return
+
+        self._pix_item.setPixmap(pixmap)
+        self._scene.setSceneRect(self._pix_item.boundingRect())
+
+        self._zoom_reset()
 
         name = Path(path).name
         idx_str = f"{self.current_index + 1} / {len(self.image_paths)}"
         self._title_label.setText(f"{name}  —  {idx_str}")
-
-        self._apply_display()
-
-    def _apply_display(self) -> None:
-        if self._pixmap is None or self._pixmap.isNull():
-            self._img_label.setText("Cannot load image")
-            return
-
-        if self._fit_mode:
-            available = self._scroll.size()
-            scaled = self._pixmap.scaled(
-                available, Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
-        else:
-            w = int(self._pixmap.width() * self._zoom_factor)
-            h = int(self._pixmap.height() * self._zoom_factor)
-            scaled = self._pixmap.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-
-        self._img_label.setPixmap(scaled)
-        self._img_label.resize(scaled.size())
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._apply_display()
 
     def show_prev(self) -> None:
         if not self.image_paths:
@@ -145,34 +144,18 @@ class ImageViewer(QDialog):
         self.current_index = (self.current_index + 1) % len(self.image_paths)
         self._load_current()
 
-    def _toggle_fit(self, checked: bool) -> None:
-        self._fit_mode = checked
-        self._apply_display()
-
     def _zoom_in(self) -> None:
-        self._act_fit.setChecked(False)
-        self._fit_mode = False
-        self._zoom_factor = min(self._zoom_factor * 1.25, 8.0)
-        self._apply_display()
+        self._scale_factor *= 1.15
+        self._view.scale(1.15, 1.15)
 
     def _zoom_out(self) -> None:
-        self._act_fit.setChecked(False)
-        self._fit_mode = False
-        self._zoom_factor = max(self._zoom_factor / 1.25, 0.05)
-        self._apply_display()
+        self._scale_factor /= 1.15
+        self._view.scale(1 / 1.15, 1 / 1.15)
 
     def _zoom_reset(self) -> None:
-        self._act_fit.setChecked(False)
-        self._fit_mode = False
-        self._zoom_factor = 1.0
-        self._apply_display()
-
-    def wheelEvent(self, event: QWheelEvent) -> None:
-        delta = event.angleDelta().y()
-        if delta > 0:
-            self._zoom_in()
-        elif delta < 0:
-            self._zoom_out()
+        self._view.resetTransform()
+        self._scale_factor = 1.0
+        self._view.centerOn(self._pix_item)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key_Escape:

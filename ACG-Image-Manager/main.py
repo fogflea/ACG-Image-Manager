@@ -14,11 +14,13 @@ from PySide6.QtGui import QIcon
 from PySide6.QtCore import Qt
 
 from app.database import init_db
+from app.metadata_manager import load_metadata
 from ui.main_window import MainWindow
 
 
 def main() -> None:
     init_db()
+    load_metadata()
 
     app = QApplication(sys.argv)
     app.setApplicationName("Anime Image Manager")

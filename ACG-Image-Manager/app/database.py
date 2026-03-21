@@ -29,6 +29,21 @@ from typing import Optional
 
 
 DB_PATH = Path(__file__).parent.parent / "data" / "database.db"
+_OPEN_CONNECTIONS: set[sqlite3.Connection] = set()
+
+
+def _prune_closed_connections() -> None:
+    """
+    Drop already-closed handles from the registry.
+    """
+    closed: list[sqlite3.Connection] = []
+    for conn in _OPEN_CONNECTIONS:
+        try:
+            conn.execute("SELECT 1")
+        except sqlite3.Error:
+            closed.append(conn)
+    for conn in closed:
+        _OPEN_CONNECTIONS.discard(conn)
 
 
 def _norm(path: str) -> str:
@@ -37,11 +52,38 @@ def _norm(path: str) -> str:
 
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
+    _prune_closed_connections()
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    _OPEN_CONNECTIONS.add(conn)
     return conn
+
+
+def close_database() -> None:
+    """
+    Close every tracked SQLite connection to release OS file locks.
+
+    Import/replace flows call this before overwriting database.db to avoid
+    WinError 32 on Windows when another live connection still holds handles.
+    """
+    stale = list(_OPEN_CONNECTIONS)
+    for conn in stale:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            # Best-effort cleanup: a closing failure should not block import.
+            pass
+    _OPEN_CONNECTIONS.clear()
+
+
+def reopen_database() -> None:
+    """
+    Re-open DB after import replacement so startup-time pragmas are re-applied.
+    """
+    with get_connection() as conn:
+        conn.execute("SELECT 1")
 
 
 def init_db() -> None:
@@ -122,6 +164,10 @@ def get_image_metadata(file_path: str) -> Optional[dict]:
         if row is None:
             return None
         data = dict(row)
+        # Keep UI-safe string values even if older/newer DB rows contain NULL.
+        data["artist"] = data.get("artist") or ""
+        data["series"] = data.get("series") or ""
+        data["description"] = data.get("description") or ""
         tags = conn.execute(
             """SELECT t.name FROM tags t
                JOIN image_tags it ON t.id = it.tag_id
@@ -261,6 +307,159 @@ def remove_tags(file_paths: list[str], tags: list[str]) -> None:
         raise RuntimeError(f"Failed to remove tags: {exc}") from exc
 
 
+def rename_tag(old_name: str, new_name: str) -> None:
+    """
+    Rename a tag while preserving all image links.
+
+    If new_name already exists, links from old_name are merged into the
+    existing new_name tag and the old tag row is removed.
+    """
+    old_name = old_name.strip().lower()
+    new_name = new_name.strip().lower()
+    if not old_name or not new_name or old_name == new_name:
+        return
+
+    try:
+        with get_connection() as conn:
+            old_row = conn.execute(
+                "SELECT id FROM tags WHERE name = ?",
+                (old_name,),
+            ).fetchone()
+            if not old_row:
+                return
+
+            new_row = conn.execute(
+                "SELECT id FROM tags WHERE name = ?",
+                (new_name,),
+            ).fetchone()
+
+            if new_row:
+                # Merge: copy links to the existing new tag, then drop old links/tag.
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO image_tags (file_path, tag_id)
+                    SELECT file_path, ? FROM image_tags WHERE tag_id = ?
+                    """,
+                    (new_row["id"], old_row["id"]),
+                )
+                conn.execute(
+                    "DELETE FROM image_tags WHERE tag_id = ?",
+                    (old_row["id"],),
+                )
+                conn.execute(
+                    "DELETE FROM tags WHERE id = ?",
+                    (old_row["id"],),
+                )
+            else:
+                conn.execute(
+                    "UPDATE tags SET name = ? WHERE id = ?",
+                    (new_name, old_row["id"]),
+                )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to rename tag: {exc}") from exc
+
+
+def delete_tag(tag_name: str) -> None:
+    """
+    Remove a tag from all images and delete the tag row itself.
+    """
+    tag_name = tag_name.strip().lower()
+    if not tag_name:
+        return
+
+    try:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM tags WHERE name = ?",
+                (tag_name,),
+            ).fetchone()
+            if not row:
+                return
+
+            conn.execute("DELETE FROM image_tags WHERE tag_id = ?", (row["id"],))
+            conn.execute("DELETE FROM tags WHERE id = ?", (row["id"],))
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to delete tag: {exc}") from exc
+
+
+def rename_artist(old_name: str, new_name: str) -> None:
+    """Rename artist text on all image rows that reference old_name."""
+    old_name = old_name.strip()
+    new_name = new_name.strip()
+    if not old_name or not new_name or old_name == new_name:
+        return
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE images SET artist = ? WHERE artist = ?",
+                (new_name, old_name),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to rename artist: {exc}") from exc
+
+
+def delete_artist(artist_name: str) -> None:
+    """
+    Remove artist reference from all images.
+
+    The current schema stores artist inline on images (no separate artists
+    table), so "delete artist" means nulling the value on all matching rows.
+    """
+    artist_name = artist_name.strip()
+    if not artist_name:
+        return
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE images SET artist = NULL WHERE artist = ?",
+                (artist_name,),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to delete artist: {exc}") from exc
+
+
+def rename_series(old_name: str, new_name: str) -> None:
+    """Rename series text on all image rows that reference old_name."""
+    old_name = old_name.strip()
+    new_name = new_name.strip()
+    if not old_name or not new_name or old_name == new_name:
+        return
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE images SET series = ? WHERE series = ?",
+                (new_name, old_name),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to rename series: {exc}") from exc
+
+
+def delete_series(series_name: str) -> None:
+    """
+    Remove series reference from all images.
+
+    The current schema stores series inline on images (no separate series
+    table), so "delete series" means nulling the value on all matching rows.
+    """
+    series_name = series_name.strip()
+    if not series_name:
+        return
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE images SET series = NULL WHERE series = ?",
+                (series_name,),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to delete series: {exc}") from exc
+
+
 # ---------------------------------------------------------------------------
 # Read helpers
 # ---------------------------------------------------------------------------
@@ -271,6 +470,23 @@ def get_all_tags() -> list[str]:
         return [r["name"] for r in rows]
 
 
+def get_tag_usage_counts() -> list[tuple[str, int]]:
+    """
+    Return [(tag_name, usage_count), ...], sorted by most-used first.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT t.name AS name, COUNT(it.file_path) AS usage_count
+            FROM tags t
+            LEFT JOIN image_tags it ON it.tag_id = t.id
+            GROUP BY t.id, t.name
+            ORDER BY usage_count DESC, t.name ASC
+            """
+        ).fetchall()
+        return [(r["name"], int(r["usage_count"])) for r in rows]
+
+
 def get_all_artists() -> list[str]:
     with get_connection() as conn:
         rows = conn.execute(
@@ -279,12 +495,46 @@ def get_all_artists() -> list[str]:
         return [r["artist"] for r in rows]
 
 
+def get_artist_usage_counts() -> list[tuple[str, int]]:
+    """
+    Return [(artist_name, usage_count), ...], sorted by most-used first.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT artist AS name, COUNT(*) AS usage_count
+            FROM images
+            WHERE artist IS NOT NULL AND artist != ''
+            GROUP BY artist
+            ORDER BY usage_count DESC, artist ASC
+            """
+        ).fetchall()
+        return [(r["name"], int(r["usage_count"])) for r in rows]
+
+
 def get_all_series() -> list[str]:
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT DISTINCT series FROM images WHERE series != '' ORDER BY series"
         ).fetchall()
         return [r["series"] for r in rows]
+
+
+def get_series_usage_counts() -> list[tuple[str, int]]:
+    """
+    Return [(series_name, usage_count), ...], sorted by most-used first.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT series AS name, COUNT(*) AS usage_count
+            FROM images
+            WHERE series IS NOT NULL AND series != ''
+            GROUP BY series
+            ORDER BY usage_count DESC, series ASC
+            """
+        ).fetchall()
+        return [(r["name"], int(r["usage_count"])) for r in rows]
 
 
 def get_all_image_paths() -> list[str]:
