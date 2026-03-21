@@ -18,7 +18,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QLineEdit, QPushButton,
     QDialog, QVBoxLayout, QTabWidget, QListWidget,
-    QListWidgetItem, QLabel, QDialogButtonBox
+    QListWidgetItem, QLabel, QDialogButtonBox,
+    QMenu, QInputDialog, QMessageBox
 )
 
 from app import metadata_manager as mm
@@ -108,6 +109,10 @@ class PickerDialog(QDialog):
         self._lists: dict[str, QListWidget] = {}
         for tab_name, prefix in [("Tags", "tag"), ("Artists", "artist"), ("Series", "series")]:
             lst = QListWidget()
+            lst.setContextMenuPolicy(Qt.CustomContextMenu)
+            lst.customContextMenuRequested.connect(
+                lambda pos, p=prefix: self._show_item_menu(p, pos)
+            )
             # itemChanged fires after the check state actually changes, whether
             # the user clicked the checkbox or the text row.  This is more
             # reliable than itemClicked, which fires at different points in the
@@ -197,6 +202,84 @@ class PickerDialog(QDialog):
 
         # Notify SearchBar
         self.token_toggled.emit(token, new_checked)
+
+    def _show_item_menu(self, prefix: str, pos) -> None:
+        lst = self._lists[prefix]
+        item = lst.itemAt(pos)
+        if item is None:
+            return
+
+        menu = QMenu(self)
+        action_rename = menu.addAction("Rename")
+        action_delete = menu.addAction("Delete")
+        chosen = menu.exec(lst.mapToGlobal(pos))
+
+        value = item.text().strip()
+        if not value:
+            return
+
+        if chosen == action_rename:
+            self._rename_value(prefix, value)
+        elif chosen == action_delete:
+            self._delete_value(prefix, value)
+
+    def _rename_value(self, prefix: str, old_value: str) -> None:
+        new_value, ok = QInputDialog.getText(
+            self,
+            f"Rename {prefix}",
+            f"New {prefix} name:",
+            text=old_value,
+        )
+        if not ok:
+            return
+        new_value = new_value.strip()
+        if not new_value or new_value == old_value:
+            return
+
+        try:
+            if prefix == "tag":
+                mm.rename_tag(old_value, new_value)
+            elif prefix == "artist":
+                mm.rename_artist(old_value, new_value)
+            else:
+                mm.rename_series(old_value, new_value)
+
+            self._all_data = {
+                "tag": mm.all_tags(),
+                "artist": mm.all_artists(),
+                "series": mm.all_series(),
+            }
+            self._apply_filter(self._filter_input.text())
+        except RuntimeError as exc:
+            QMessageBox.critical(self, "Rename failed", str(exc))
+
+    def _delete_value(self, prefix: str, value: str) -> None:
+        answer = QMessageBox.question(
+            self,
+            f"Delete {prefix}",
+            f"Delete '{value}'?\n\nThis also updates image metadata references.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            if prefix == "tag":
+                mm.delete_tag(value)
+            elif prefix == "artist":
+                mm.delete_artist(value)
+            else:
+                mm.delete_series(value)
+
+            self._all_data = {
+                "tag": mm.all_tags(),
+                "artist": mm.all_artists(),
+                "series": mm.all_series(),
+            }
+            self._apply_filter(self._filter_input.text())
+        except RuntimeError as exc:
+            QMessageBox.critical(self, "Delete failed", str(exc))
 
 
 # ---------------------------------------------------------------------------

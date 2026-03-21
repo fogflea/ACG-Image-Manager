@@ -16,14 +16,19 @@ Key changes in this version
   the center grid can never be hidden.
 """
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QTimer, QSettings
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QSplitter,
-    QStatusBar, QProgressBar, QLabel
+    QStatusBar, QProgressBar, QLabel,
+    QFileDialog, QMessageBox
 )
 
 from app.database import get_all_image_paths
 from app.image_scanner import ScannerThread, FolderFilterThread
+from app.library_exporter import export_library_zip
+from app.library_importer import import_library_zip
 from ui.folder_tree import FolderTree
 from ui.image_grid import ImageGrid
 from ui.metadata_panel import MetadataPanel
@@ -51,6 +56,7 @@ class MainWindow(QMainWindow):
         self._filter_thread: FolderFilterThread = None
 
         self._build_ui()
+        self._build_menu()
         self._apply_dark_style()
         self._restore_geometry()
         self._start_initial_scan()
@@ -113,6 +119,15 @@ class MainWindow(QMainWindow):
         self._progress.setFixedWidth(150)
         self._progress.setVisible(False)
         status_bar.addPermanentWidget(self._progress)
+
+    def _build_menu(self) -> None:
+        file_menu = self.menuBar().addMenu("File")
+
+        action_export = file_menu.addAction("Export Library")
+        action_export.triggered.connect(self._export_library)
+
+        action_import = file_menu.addAction("Import Library")
+        action_import.triggered.connect(self._import_library)
 
     # ------------------------------------------------------------------
     # Window geometry persistence
@@ -376,3 +391,56 @@ class MainWindow(QMainWindow):
 
     def _hide_loading(self) -> None:
         self._progress.setVisible(False)
+
+    # ------------------------------------------------------------------
+    # Import / Export actions
+    # ------------------------------------------------------------------
+
+    def _export_library(self) -> None:
+        target, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Library",
+            "library-export.zip",
+            "ZIP files (*.zip)",
+        )
+        if not target:
+            return
+
+        try:
+            export_library_zip(Path(target))
+            self.statusBar().showMessage(f"Library exported to {target}", 5000)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+
+    def _import_library(self) -> None:
+        source, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Library",
+            "",
+            "ZIP files (*.zip)",
+        )
+        if not source:
+            return
+
+        answer = QMessageBox.warning(
+            self,
+            "Confirm import",
+            (
+                "Import will overwrite current data/database.db, images/, and cache/.\n"
+                "A backup of the current database will be saved as database_backup.db.\n\n"
+                "Continue?"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            import_library_zip(Path(source))
+            self._start_scan()
+            self._folder_tree.refresh()
+            self._trigger_filter()
+            QMessageBox.information(self, "Import complete", "Library import finished.")
+        except Exception as exc:
+            QMessageBox.critical(self, "Import failed", str(exc))

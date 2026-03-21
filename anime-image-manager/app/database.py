@@ -261,6 +261,153 @@ def remove_tags(file_paths: list[str], tags: list[str]) -> None:
         raise RuntimeError(f"Failed to remove tags: {exc}") from exc
 
 
+def rename_tag(old_name: str, new_name: str) -> None:
+    """
+    Rename a tag while preserving all image links.
+
+    If new_name already exists, links from old_name are merged into the
+    existing new_name tag and the old tag row is removed.
+    """
+    old_name = old_name.strip().lower()
+    new_name = new_name.strip().lower()
+    if not old_name or not new_name or old_name == new_name:
+        return
+
+    try:
+        with get_connection() as conn:
+            old_row = conn.execute(
+                "SELECT id FROM tags WHERE name = ?",
+                (old_name,),
+            ).fetchone()
+            if not old_row:
+                return
+
+            new_row = conn.execute(
+                "SELECT id FROM tags WHERE name = ?",
+                (new_name,),
+            ).fetchone()
+
+            if new_row:
+                # Merge: copy links to the existing new tag, then drop old links/tag.
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO image_tags (file_path, tag_id)
+                    SELECT file_path, ? FROM image_tags WHERE tag_id = ?
+                    """,
+                    (new_row["id"], old_row["id"]),
+                )
+                conn.execute(
+                    "DELETE FROM image_tags WHERE tag_id = ?",
+                    (old_row["id"],),
+                )
+                conn.execute(
+                    "DELETE FROM tags WHERE id = ?",
+                    (old_row["id"],),
+                )
+            else:
+                conn.execute(
+                    "UPDATE tags SET name = ? WHERE id = ?",
+                    (new_name, old_row["id"]),
+                )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to rename tag: {exc}") from exc
+
+
+def delete_tag(tag_name: str) -> None:
+    """
+    Remove a tag from all images and delete the tag row itself.
+    """
+    tag_name = tag_name.strip().lower()
+    if not tag_name:
+        return
+
+    try:
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM tags WHERE name = ?",
+                (tag_name,),
+            ).fetchone()
+            if not row:
+                return
+
+            conn.execute("DELETE FROM image_tags WHERE tag_id = ?", (row["id"],))
+            conn.execute("DELETE FROM tags WHERE id = ?", (row["id"],))
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to delete tag: {exc}") from exc
+
+
+def rename_artist(old_name: str, new_name: str) -> None:
+    """Rename artist text on all image rows that reference old_name."""
+    old_name = old_name.strip()
+    new_name = new_name.strip()
+    if not old_name or not new_name or old_name == new_name:
+        return
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE images SET artist = ? WHERE artist = ?",
+                (new_name, old_name),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to rename artist: {exc}") from exc
+
+
+def delete_artist(artist_name: str) -> None:
+    """
+    Remove artist reference from all images by setting artist to empty text.
+    """
+    artist_name = artist_name.strip()
+    if not artist_name:
+        return
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE images SET artist = '' WHERE artist = ?",
+                (artist_name,),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to delete artist: {exc}") from exc
+
+
+def rename_series(old_name: str, new_name: str) -> None:
+    """Rename series text on all image rows that reference old_name."""
+    old_name = old_name.strip()
+    new_name = new_name.strip()
+    if not old_name or not new_name or old_name == new_name:
+        return
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE images SET series = ? WHERE series = ?",
+                (new_name, old_name),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to rename series: {exc}") from exc
+
+
+def delete_series(series_name: str) -> None:
+    """
+    Remove series reference from all images by setting series to empty text.
+    """
+    series_name = series_name.strip()
+    if not series_name:
+        return
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE images SET series = '' WHERE series = ?",
+                (series_name,),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to delete series: {exc}") from exc
+
+
 # ---------------------------------------------------------------------------
 # Read helpers
 # ---------------------------------------------------------------------------
