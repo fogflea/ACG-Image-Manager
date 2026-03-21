@@ -1,0 +1,26 @@
+QMainWindow, QWidget {
+    background-color: #f5f5f7;
+    color: #1f2937;
+}
+QSplitter::handle { background: #d1d5db; }
+QSplitter::handle:hover { background: #9ca3af; }
+QLineEdit, QTextEdit, QListWidget, QTreeView {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    color: #1f2937;
+}
+QListWidget::item:selected, QTreeView::item:selected { background: #dbeafe; }
+QPushButton {
+    background: #e5e7eb;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 4px 10px;
+}
+QPushButton:hover { background: #d1d5db; }
+QMenu {
+    background: #ffffff;
+    color: #111827;
+    border: 1px solid #cbd5e1;
+}
+QMenu::item:selected { background: #dbeafe; }
+QStatusBar { background: #e5e7eb; color: #374151; }

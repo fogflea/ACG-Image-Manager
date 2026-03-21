@@ -12,6 +12,8 @@ import shutil
 import sqlite3
 import zipfile
 
+from app import database as db
+
 
 APP_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = APP_ROOT / "data"
@@ -33,14 +35,17 @@ def _checkpoint_and_close_db() -> None:
     The app uses short-lived connections, but this guarantees WAL pages are
     flushed before import replaces the database file.
     """
-    if not DATA_DB.exists():
-        return
+    # First close any currently tracked connections from the app runtime.
+    db.close_database()
 
-    conn = sqlite3.connect(str(DATA_DB))
-    try:
-        conn.execute("PRAGMA wal_checkpoint(FULL)")
-    finally:
-        conn.close()
+    if DATA_DB.exists():
+        conn = sqlite3.connect(str(DATA_DB), timeout=10)
+        try:
+            conn.execute("PRAGMA wal_checkpoint(FULL)")
+        finally:
+            conn.close()
+    # Call close_database again in case any new handles were opened during checkpoint.
+    db.close_database()
 
 
 def import_library_zip(zip_path: Path) -> None:
@@ -70,5 +75,7 @@ def import_library_zip(zip_path: Path) -> None:
         _safe_remove(DATA_DB.with_suffix(".db-wal"))
         _safe_remove(DATA_DB.with_suffix(".db-shm"))
         shutil.copy2(extracted_db, DATA_DB)
+        # Re-open a fresh connection lifecycle after replacement.
+        db.reopen_database()
     finally:
         _safe_remove(temp_dir)

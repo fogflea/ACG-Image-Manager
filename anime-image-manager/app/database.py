@@ -29,6 +29,21 @@ from typing import Optional
 
 
 DB_PATH = Path(__file__).parent.parent / "data" / "database.db"
+_OPEN_CONNECTIONS: set[sqlite3.Connection] = set()
+
+
+def _prune_closed_connections() -> None:
+    """
+    Drop already-closed handles from the registry.
+    """
+    closed: list[sqlite3.Connection] = []
+    for conn in _OPEN_CONNECTIONS:
+        try:
+            conn.execute("SELECT 1")
+        except sqlite3.Error:
+            closed.append(conn)
+    for conn in closed:
+        _OPEN_CONNECTIONS.discard(conn)
 
 
 def _norm(path: str) -> str:
@@ -37,11 +52,38 @@ def _norm(path: str) -> str:
 
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
+    _prune_closed_connections()
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    _OPEN_CONNECTIONS.add(conn)
     return conn
+
+
+def close_database() -> None:
+    """
+    Close every tracked SQLite connection to release OS file locks.
+
+    Import/replace flows call this before overwriting database.db to avoid
+    WinError 32 on Windows when another live connection still holds handles.
+    """
+    stale = list(_OPEN_CONNECTIONS)
+    for conn in stale:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            # Best-effort cleanup: a closing failure should not block import.
+            pass
+    _OPEN_CONNECTIONS.clear()
+
+
+def reopen_database() -> None:
+    """
+    Re-open DB after import replacement so startup-time pragmas are re-applied.
+    """
+    with get_connection() as conn:
+        conn.execute("SELECT 1")
 
 
 def init_db() -> None:
