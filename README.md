@@ -1,4 +1,4 @@
-# Anime Image Manager — Build Instructions
+# ACG-Image-Manager — Build Instructions
 
 ## Running Directly (Development)
 
