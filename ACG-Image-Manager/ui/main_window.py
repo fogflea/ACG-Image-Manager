@@ -42,8 +42,9 @@ class MainWindow(QMainWindow):
 
         i18n.language_changed.connect(self._retranslate_ui)
 
-        self._build_ui()
         self._build_menu()
+        self._build_ui()
+        self._retranslate_ui()
         self._load_saved_language()
         self._load_saved_theme()
         self._restore_geometry()
@@ -109,8 +110,6 @@ class MainWindow(QMainWindow):
         self._progress.setFixedWidth(150)
         self._progress.setVisible(False)
         status_bar.addPermanentWidget(self._progress)
-
-        self._retranslate_ui()
 
     def _build_menu(self) -> None:
         self._file_menu = self.menuBar().addMenu("")
