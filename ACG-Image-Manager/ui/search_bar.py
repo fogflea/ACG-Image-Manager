@@ -115,6 +115,7 @@ class PickerDialog(QDialog):
                 token = f"{prefix}:{value}"
                 state = self._token_states.get(token, "neutral")
                 item = QListWidgetItem()
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
                 item.setData(Qt.UserRole, token)
                 item.setData(Qt.UserRole + 1, value)
                 item.setData(Qt.UserRole + 2, count)
@@ -128,17 +129,20 @@ class PickerDialog(QDialog):
         font = QFont(item.font())
 
         if state == "include":
-            item.setText(f"✔ {name} ({count})")
+            item.setText(f"{name} ({count})")
+            item.setCheckState(Qt.Checked)
             item.setForeground(QBrush(QColor("#7bd88f")))
             font.setStrikeOut(False)
             item.setFont(font)
         elif state == "exclude":
             item.setText(f"✖ {name} ({count})")
+            item.setCheckState(Qt.Unchecked)
             item.setForeground(QBrush(QColor("#ff6b6b")))
             font.setStrikeOut(True)
             item.setFont(font)
         else:
             item.setText(f"{name} ({count})")
+            item.setCheckState(Qt.Unchecked)
             item.setForeground(QBrush())
             font.setStrikeOut(False)
             item.setFont(font)
