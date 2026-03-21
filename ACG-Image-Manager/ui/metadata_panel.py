@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QTextEdit, QPushButton,
     QFrame, QListWidget, QListWidgetItem,
-    QAbstractItemView, QCompleter, QMessageBox, QInputDialog
+    QAbstractItemView, QCompleter, QMessageBox
 )
 
 from app import metadata_manager as mm
@@ -113,27 +113,6 @@ class MetadataPanel(QWidget):
         self._desc_edit.focusOutEvent = self._desc_focus_lost
         layout.addWidget(self._desc_edit)
 
-        self._batch_label = QLabel()
-        self._batch_label.setStyleSheet("font-weight: bold; padding-top: 4px;")
-        layout.addWidget(self._batch_label)
-        batch_row = QHBoxLayout()
-        self._btn_batch_remove_tags = QPushButton()
-        self._btn_batch_remove_tags.clicked.connect(self._on_batch_remove_tags)
-        batch_row.addWidget(self._btn_batch_remove_tags)
-
-        self._btn_batch_clear_artist = QPushButton()
-        self._btn_batch_clear_artist.clicked.connect(self._on_batch_clear_artist)
-        batch_row.addWidget(self._btn_batch_clear_artist)
-
-        self._btn_batch_clear_series = QPushButton()
-        self._btn_batch_clear_series.clicked.connect(self._on_batch_clear_series)
-        batch_row.addWidget(self._btn_batch_clear_series)
-
-        self._btn_batch_clear_desc = QPushButton()
-        self._btn_batch_clear_desc.clicked.connect(self._on_batch_clear_desc)
-        batch_row.addWidget(self._btn_batch_clear_desc)
-        layout.addLayout(batch_row)
-
         self._status_label = QLabel("")
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet("font-size: 11px; color: #a6e3a1;")
@@ -153,11 +132,6 @@ class MetadataPanel(QWidget):
         self._btn_save_series.setText(i18n.tr("metadata.apply"))
         self._btn_add.setText(i18n.tr("metadata.add"))
         self._btn_remove.setText(i18n.tr("metadata.remove"))
-        self._batch_label.setText(i18n.tr("metadata.batch_tools"))
-        self._btn_batch_remove_tags.setText(i18n.tr("metadata.remove_tags"))
-        self._btn_batch_clear_artist.setText(i18n.tr("metadata.clear_artist"))
-        self._btn_batch_clear_series.setText(i18n.tr("metadata.clear_series"))
-        self._btn_batch_clear_desc.setText(i18n.tr("metadata.clear_description"))
         self._artist_edit.setPlaceholderText(i18n.tr("metadata.artist_ph"))
         self._series_edit.setPlaceholderText(i18n.tr("metadata.series_ph"))
         self._tag_input.setPlaceholderText(i18n.tr("metadata.tags_ph"))
@@ -226,8 +200,6 @@ class MetadataPanel(QWidget):
             self._series_edit, self._btn_save_series,
             self._tag_input, self._desc_edit, self._tags_list,
             self._btn_add, self._btn_remove,
-            self._btn_batch_remove_tags, self._btn_batch_clear_artist,
-            self._btn_batch_clear_series, self._btn_batch_clear_desc,
         ]:
             w.setEnabled(enabled)
 
@@ -307,49 +279,6 @@ class MetadataPanel(QWidget):
             self.metadata_changed.emit()
         except Exception as exc:
             self._show_status(f"Error removing tags: {exc}", is_error=True)
-
-    def _on_batch_remove_tags(self) -> None:
-        if not self._selected_paths:
-            return
-        text, ok = QInputDialog.getText(
-            self,
-            i18n.tr("input.remove_tags_title"),
-            i18n.tr("input.remove_tags_label"),
-        )
-        if not ok:
-            return
-        tags = [t.strip().lower() for t in text.split(",") if t.strip()]
-        if not tags:
-            return
-        if not self._confirm(i18n.tr("confirm.remove_tags", count=len(self._selected_paths), tags=", ".join(tags))):
-            return
-        mm.remove_tags_from_images(self._selected_paths, tags)
-        self.refresh_suggestions()
-        self.load_selection(self._selected_paths)
-        self._show_status(i18n.tr("status.tags_removed", count=len(tags)))
-        self.metadata_changed.emit()
-
-    def _on_batch_clear_artist(self) -> None:
-        if self._selected_paths and self._confirm(i18n.tr("confirm.clear_artist", count=len(self._selected_paths))):
-            mm.save_artist(self._selected_paths, "")
-            self.load_selection(self._selected_paths)
-            self._show_status(i18n.tr("status.artist_cleared", count=len(self._selected_paths)))
-            self.metadata_changed.emit()
-
-    def _on_batch_clear_series(self) -> None:
-        if self._selected_paths and self._confirm(i18n.tr("confirm.clear_series", count=len(self._selected_paths))):
-            mm.save_series(self._selected_paths, "")
-            self.load_selection(self._selected_paths)
-            self._show_status(i18n.tr("status.series_cleared", count=len(self._selected_paths)))
-            self.metadata_changed.emit()
-
-    def _on_batch_clear_desc(self) -> None:
-        if self._selected_paths and self._confirm(i18n.tr("confirm.clear_description", count=len(self._selected_paths))):
-            for path in self._selected_paths:
-                mm.save_description(path, "")
-            self.load_selection(self._selected_paths)
-            self._show_status(i18n.tr("status.description_cleared", count=len(self._selected_paths)))
-            self.metadata_changed.emit()
 
     def _desc_focus_lost(self, event) -> None:
         if len(self._selected_paths) == 1:
