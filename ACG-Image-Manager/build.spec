@@ -16,6 +16,7 @@ a = Analysis(
         ('data', 'data'),
         ('cache', 'cache'),
         ('images', 'images'),
+        ('themes', 'themes'),
     ],
     hiddenimports=[
         'PySide6.QtCore',

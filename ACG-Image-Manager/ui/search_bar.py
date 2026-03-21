@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from app import metadata_manager as mm
+from ui.i18n import i18n
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +86,7 @@ class PickerDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Tag / Artist / Series Picker")
+        self.setWindowTitle(i18n.tr("picker_title"))
         self.setMinimumSize(360, 440)
         self.resize(400, 480)
         # Track which tokens are currently active (updated from search box)
@@ -104,7 +105,7 @@ class PickerDialog(QDialog):
 
         # In-popup filter
         self._filter_input = QLineEdit()
-        self._filter_input.setPlaceholderText("Filter list...")
+        self._filter_input.setPlaceholderText(i18n.tr("filter_list"))
         self._filter_input.textChanged.connect(self._apply_filter)
         layout.addWidget(self._filter_input)
 
@@ -113,7 +114,7 @@ class PickerDialog(QDialog):
         layout.addWidget(self._tabs)
 
         self._lists: dict[str, QListWidget] = {}
-        for tab_name, prefix in [("Tags", "tag"), ("Artists", "artist"), ("Series", "series")]:
+        for tab_name, prefix in [(i18n.tr("tab_tags"), "tag"), (i18n.tr("tab_artists"), "artist"), (i18n.tr("tab_series"), "series")]:
             lst = QListWidget()
             lst.setContextMenuPolicy(Qt.CustomContextMenu)
             lst.customContextMenuRequested.connect(
@@ -224,8 +225,8 @@ class PickerDialog(QDialog):
             return
 
         menu = QMenu(self)
-        action_rename = menu.addAction("Rename")
-        action_delete = menu.addAction("Delete")
+        action_rename = menu.addAction(i18n.tr("rename"))
+        action_delete = menu.addAction(i18n.tr("delete"))
         chosen = menu.exec(lst.mapToGlobal(pos))
 
         value = (item.data(Qt.UserRole + 1) or item.text()).strip()
@@ -240,8 +241,8 @@ class PickerDialog(QDialog):
     def _rename_value(self, prefix: str, old_value: str) -> None:
         new_value, ok = QInputDialog.getText(
             self,
-            f"Rename {prefix}",
-            f"New {prefix} name:",
+            i18n.tr("rename_prefix", prefix=prefix),
+            i18n.tr("new_prefix_name", prefix=prefix),
             text=old_value,
         )
         if not ok:
@@ -262,13 +263,13 @@ class PickerDialog(QDialog):
             self._apply_filter(self._filter_input.text())
             self.metadata_updated.emit()
         except RuntimeError as exc:
-            QMessageBox.critical(self, "Rename failed", str(exc))
+            QMessageBox.critical(self, i18n.tr("rename_failed"), str(exc))
 
     def _delete_value(self, prefix: str, value: str) -> None:
         answer = QMessageBox.question(
             self,
-            f"Delete {prefix}",
-            f"Delete '{value}'?\n\nThis also updates image metadata references.",
+            i18n.tr("delete_prefix", prefix=prefix),
+            i18n.tr("delete_confirm", value=value),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -287,7 +288,7 @@ class PickerDialog(QDialog):
             self._apply_filter(self._filter_input.text())
             self.metadata_updated.emit()
         except RuntimeError as exc:
-            QMessageBox.critical(self, "Delete failed", str(exc))
+            QMessageBox.critical(self, i18n.tr("delete_failed"), str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -309,33 +310,43 @@ class SearchBar(QWidget):
         layout.setSpacing(6)
 
         self._search_input = QLineEdit()
-        self._search_input.setPlaceholderText(
-            'Search: tag:catgirl  artist:SomeArtist  series:ReZero'
-        )
+        self._search_input.setPlaceholderText(i18n.tr("search_placeholder"))
         self._search_input.returnPressed.connect(self._on_search)
         # Fix #3: emit a live search whenever the text changes
         self._search_input.textChanged.connect(self._on_text_changed)
         layout.addWidget(self._search_input)
 
-        btn_search = QPushButton("Search")
+        self._btn_search = QPushButton(i18n.tr("search"))
+        btn_search = self._btn_search
         btn_search.setFixedWidth(70)
         btn_search.clicked.connect(self._on_search)
         layout.addWidget(btn_search)
 
-        btn_clear = QPushButton("Clear")
+        self._btn_clear = QPushButton(i18n.tr("clear"))
+        btn_clear = self._btn_clear
         btn_clear.setFixedWidth(55)
         btn_clear.clicked.connect(self._on_clear)
         layout.addWidget(btn_clear)
 
-        btn_picker = QPushButton("🏷 Picker")
+        self._btn_picker = QPushButton(i18n.tr("picker"))
+        btn_picker = self._btn_picker
         btn_picker.setFixedWidth(80)
         btn_picker.clicked.connect(self._open_picker)
         layout.addWidget(btn_picker)
 
-        btn_refresh = QPushButton("⟳ Refresh")
+        self._btn_refresh = QPushButton(i18n.tr("refresh"))
+        btn_refresh = self._btn_refresh
         btn_refresh.setFixedWidth(90)
         btn_refresh.clicked.connect(self.refresh_triggered.emit)
         layout.addWidget(btn_refresh)
+
+
+    def retranslate_ui(self) -> None:
+        self._search_input.setPlaceholderText(i18n.tr("search_placeholder"))
+        self._btn_search.setText(i18n.tr("search"))
+        self._btn_clear.setText(i18n.tr("clear"))
+        self._btn_picker.setText(i18n.tr("picker"))
+        self._btn_refresh.setText(i18n.tr("refresh"))
 
     # ------------------------------------------------------------------
     # Internal slots

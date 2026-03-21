@@ -1,5 +1,5 @@
 """
-Entry point for Anime Image Manager.
+Entry point for ACG-Image-Manager.
 Initializes the database, applies Qt settings, and launches the main window.
 """
 
@@ -7,11 +7,17 @@ import sys
 import os
 from pathlib import Path
 
+
+def resource_path(relative_path):
+    import sys as _sys, os as _os
+    if hasattr(_sys, '_MEIPASS'):
+        return _os.path.join(_sys._MEIPASS, relative_path)
+    return _os.path.join(_os.path.abspath('.'), relative_path)
+
+
 os.chdir(Path(__file__).parent)
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QIcon
-from PySide6.QtCore import Qt
 
 from app.database import init_db
 from app.metadata_manager import load_metadata
@@ -23,11 +29,11 @@ def main() -> None:
     load_metadata()
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Anime Image Manager")
+    app.setApplicationName("ACG-Image-Manager")
     app.setApplicationVersion("1.0.0")
     app.setStyle("Fusion")
 
-    window = MainWindow()
+    window = MainWindow(resource_path)
     window.show()
 
     sys.exit(app.exec())
