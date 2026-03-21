@@ -18,7 +18,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QLineEdit, QPushButton,
     QDialog, QVBoxLayout, QTabWidget, QListWidget,
-    QListWidgetItem, QLabel, QDialogButtonBox
+    QListWidgetItem, QDialogButtonBox,
+    QMenu, QInputDialog, QMessageBox
 )
 
 from app import metadata_manager as mm
@@ -80,6 +81,7 @@ class PickerDialog(QDialog):
 
     # token: e.g. "tag:catgirl", is_checked: True = add, False = remove
     token_toggled = Signal(str, bool)
+    metadata_updated = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -89,7 +91,12 @@ class PickerDialog(QDialog):
         # Track which tokens are currently active (updated from search box)
         self._active_tokens: set[str] = set()
         # All data loaded from DB
-        self._all_data: dict[str, list[str]] = {"tag": [], "artist": [], "series": []}
+        # prefix -> list[(name, usage_count)]
+        self._all_data: dict[str, list[tuple[str, int]]] = {
+            "tag": [],
+            "artist": [],
+            "series": [],
+        }
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -108,6 +115,10 @@ class PickerDialog(QDialog):
         self._lists: dict[str, QListWidget] = {}
         for tab_name, prefix in [("Tags", "tag"), ("Artists", "artist"), ("Series", "series")]:
             lst = QListWidget()
+            lst.setContextMenuPolicy(Qt.CustomContextMenu)
+            lst.customContextMenuRequested.connect(
+                lambda pos, p=prefix: self._show_item_menu(p, pos)
+            )
             # itemChanged fires after the check state actually changes, whether
             # the user clicked the checkbox or the text row.  This is more
             # reliable than itemClicked, which fires at different points in the
@@ -132,17 +143,23 @@ class PickerDialog(QDialog):
         self._active_tokens = _parse_active_tokens(query)
 
         # Reload from database so newly added tags / artists / series appear
-        self._all_data = {
-            "tag": mm.all_tags(),
-            "artist": mm.all_artists(),
-            "series": mm.all_series(),
-        }
+        self._reload_stats()
 
         self._apply_filter(self._filter_input.text())
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _reload_stats(self) -> None:
+        """
+        Reload picker data with usage counts (descending by usage).
+        """
+        self._all_data = {
+            "tag": mm.tag_usage_counts(),
+            "artist": mm.artist_usage_counts(),
+            "series": mm.series_usage_counts(),
+        }
 
     def _apply_filter(self, text: str) -> None:
         """
@@ -154,12 +171,13 @@ class PickerDialog(QDialog):
         for prefix, lst in self._lists.items():
             lst.blockSignals(True)   # prevent false token_toggled emissions
             lst.clear()
-            for value in self._all_data.get(prefix, []):
+            for value, count in self._all_data.get(prefix, []):
                 if text and text not in value.lower():
                     continue
                 token = f"{prefix}:{value}"
-                item = QListWidgetItem(value)
+                item = QListWidgetItem(f"{value} ({count})")
                 item.setData(Qt.UserRole, token)  # store the full token
+                item.setData(Qt.UserRole + 1, value)  # raw value for rename/delete
 
                 # Checkable item — Qt will show a checkbox next to the text
                 is_active = token in self._active_tokens
@@ -182,7 +200,8 @@ class PickerDialog(QDialog):
         """
         token = item.data(Qt.UserRole)
         if token is None:
-            token = f"{prefix}:{item.text()}"
+            raw = item.data(Qt.UserRole + 1) or item.text()
+            token = f"{prefix}:{raw}"
 
         new_checked = item.checkState() == Qt.Checked
 
@@ -197,6 +216,78 @@ class PickerDialog(QDialog):
 
         # Notify SearchBar
         self.token_toggled.emit(token, new_checked)
+
+    def _show_item_menu(self, prefix: str, pos) -> None:
+        lst = self._lists[prefix]
+        item = lst.itemAt(pos)
+        if item is None:
+            return
+
+        menu = QMenu(self)
+        action_rename = menu.addAction("Rename")
+        action_delete = menu.addAction("Delete")
+        chosen = menu.exec(lst.mapToGlobal(pos))
+
+        value = (item.data(Qt.UserRole + 1) or item.text()).strip()
+        if not value:
+            return
+
+        if chosen == action_rename:
+            self._rename_value(prefix, value)
+        elif chosen == action_delete:
+            self._delete_value(prefix, value)
+
+    def _rename_value(self, prefix: str, old_value: str) -> None:
+        new_value, ok = QInputDialog.getText(
+            self,
+            f"Rename {prefix}",
+            f"New {prefix} name:",
+            text=old_value,
+        )
+        if not ok:
+            return
+        new_value = new_value.strip()
+        if not new_value or new_value == old_value:
+            return
+
+        try:
+            if prefix == "tag":
+                mm.rename_tag(old_value, new_value)
+            elif prefix == "artist":
+                mm.rename_artist(old_value, new_value)
+            else:
+                mm.rename_series(old_value, new_value)
+
+            self._reload_stats()
+            self._apply_filter(self._filter_input.text())
+            self.metadata_updated.emit()
+        except RuntimeError as exc:
+            QMessageBox.critical(self, "Rename failed", str(exc))
+
+    def _delete_value(self, prefix: str, value: str) -> None:
+        answer = QMessageBox.question(
+            self,
+            f"Delete {prefix}",
+            f"Delete '{value}'?\n\nThis also updates image metadata references.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            if prefix == "tag":
+                mm.delete_tag(value)
+            elif prefix == "artist":
+                mm.delete_artist(value)
+            else:
+                mm.delete_series(value)
+
+            self._reload_stats()
+            self._apply_filter(self._filter_input.text())
+            self.metadata_updated.emit()
+        except RuntimeError as exc:
+            QMessageBox.critical(self, "Delete failed", str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +357,9 @@ class SearchBar(QWidget):
             self._picker = PickerDialog(self)
             # Fix #2c / #3: connect toggle signal to add/remove logic
             self._picker.token_toggled.connect(self._on_token_toggled)
+            self._picker.metadata_updated.connect(
+                lambda: self.search_triggered.emit(self._search_input.text().strip())
+            )
 
         # Fix #4: always sync the popup state from the current search box text
         self._picker.sync_from_query(self._search_input.text())
@@ -299,3 +393,11 @@ class SearchBar(QWidget):
 
     def get_query(self) -> str:
         return self._search_input.text().strip()
+
+    def refresh_picker_data(self) -> None:
+        """
+        Refresh picker stats while it's visible so counts stay current after
+        metadata edits outside the picker.
+        """
+        if self._picker is not None and self._picker.isVisible():
+            self._picker.sync_from_query(self._search_input.text())

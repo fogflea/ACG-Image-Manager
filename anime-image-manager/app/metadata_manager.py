@@ -82,3 +82,39 @@ def all_artists() -> list[str]:
 
 def all_series() -> list[str]:
     return db.get_all_series()
+
+
+def tag_usage_counts() -> list[tuple[str, int]]:
+    return db.get_tag_usage_counts()
+
+
+def artist_usage_counts() -> list[tuple[str, int]]:
+    return db.get_artist_usage_counts()
+
+
+def series_usage_counts() -> list[tuple[str, int]]:
+    return db.get_series_usage_counts()
+
+
+def rename_tag(old_name: str, new_name: str) -> None:
+    db.rename_tag(old_name, new_name)
+
+
+def delete_tag(tag_name: str) -> None:
+    db.delete_tag(tag_name)
+
+
+def rename_artist(old_name: str, new_name: str) -> None:
+    db.rename_artist(old_name, new_name)
+
+
+def delete_artist(artist_name: str) -> None:
+    db.delete_artist(artist_name)
+
+
+def rename_series(old_name: str, new_name: str) -> None:
+    db.rename_series(old_name, new_name)
+
+
+def delete_series(series_name: str) -> None:
+    db.delete_series(series_name)
