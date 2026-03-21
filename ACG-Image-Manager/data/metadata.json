@@ -1,3 +1,13 @@
 {
-  "images": {}
+  "images": {
+    "d:/Code/python项目/ACG-Image-Manager/ACG-Image-Manager/images/1327_r18_144409_100.webp": {
+      "tags": [
+        "1",
+        "11"
+      ],
+      "artist": "1111",
+      "series": "",
+      "description": ""
+    }
+  }
 }

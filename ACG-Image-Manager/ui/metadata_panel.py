@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QStringListModel
+from PySide6.QtCore import QStringListModel
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QTextEdit, QPushButton,
