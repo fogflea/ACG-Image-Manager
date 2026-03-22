@@ -1,35 +1,23 @@
-"""
-Image thumbnail grid — lazy-loading, scrollable grid with adjustable thumbnail size.
-Supports selection (single and multi), context menus, and double-click to open viewer.
-"""
-
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
 
-from PySide6.QtCore import (
-    Qt, Signal, QSize, QRunnable, QThreadPool, QObject, QPoint, QTimer
-)
+from PySide6.QtCore import Qt, Signal, QSize, QRunnable, QThreadPool, QObject, QPoint, QTimer
 from PySide6.QtGui import QPixmap, QIcon, QColor
 from PySide6.QtWidgets import (
     QWidget, QListWidget, QListWidgetItem, QVBoxLayout,
-    QHBoxLayout, QSlider, QLabel, QAbstractItemView, QMenu,
-    QSizePolicy, QApplication
+    QHBoxLayout, QSlider, QLabel, QAbstractItemView, QMenu
 )
 
 from app.thumbnail_cache import get_thumbnail
-from ui.image_viewer import ImageViewer
+from ui.i18n import i18n
 
 
 class ThumbnailLoader(QObject):
-    """Signal carrier for async thumbnail loading results."""
     loaded = Signal(str, QPixmap)
 
 
 class ThumbnailTask(QRunnable):
-    """Loads a single thumbnail in the thread pool."""
-
     def __init__(self, file_path: str, size: int, signals: ThumbnailLoader):
         super().__init__()
         self.file_path = file_path
@@ -49,7 +37,7 @@ class ThumbnailTask(QRunnable):
 
 class ImageGrid(QWidget):
     selection_changed = Signal(list)
-    open_viewer_requested = Signal(list, int)
+    open_image_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -59,7 +47,6 @@ class ImageGrid(QWidget):
         self._pool = QThreadPool.globalInstance()
         self._pool.setMaxThreadCount(4)
         self._pending: set[str] = set()
-
         self._build_ui()
 
         self._lazy_timer = QTimer(self)
@@ -79,7 +66,8 @@ class ImageGrid(QWidget):
         controls.addWidget(self._count_label)
         controls.addStretch()
 
-        controls.addWidget(QLabel("Size:"))
+        self._size_text = QLabel(i18n.tr("size"))
+        controls.addWidget(self._size_text)
         self._slider = QSlider(Qt.Horizontal)
         self._slider.setMinimum(0)
         self._slider.setMaximum(2)
@@ -106,12 +94,12 @@ class ImageGrid(QWidget):
         self._list.customContextMenuRequested.connect(self._on_context_menu)
         self._list.itemSelectionChanged.connect(self._on_selection_changed)
         self._list.itemDoubleClicked.connect(self._on_double_click)
-        self._list.verticalScrollBar().valueChanged.connect(
-            lambda _: None  # lazy timer handles loading
-        )
         layout.addWidget(self._list)
 
         self._update_icon_size()
+
+    def retranslate_ui(self) -> None:
+        self._size_text.setText(i18n.tr("size"))
 
     def _on_size_changed(self, value: int) -> None:
         sizes = [64, 128, 256]
@@ -145,15 +133,11 @@ class ImageGrid(QWidget):
 
         self._count_label.setText(f"{len(paths)} image(s)")
 
-    # Alias used by FolderFilterThread.results_ready signal connection
     def load_images(self, paths: list[str]) -> None:
-        """Alias for set_images — called by FolderFilterThread when results arrive."""
         self.set_images(paths)
 
     def _load_visible_thumbnails(self) -> None:
-        viewport = self._list.viewport()
-        vp_rect = viewport.rect()
-
+        vp_rect = self._list.viewport().rect()
         for i in range(self._list.count()):
             item = self._list.item(i)
             rect = self._list.visualItemRect(item)
@@ -162,15 +146,12 @@ class ImageGrid(QWidget):
             path = item.data(Qt.UserRole)
             if path in self._pending:
                 continue
-            if item.icon().cacheKey() != QIcon().cacheKey() and \
-               item.data(Qt.UserRole + 1) == self._thumb_size:
+            if item.icon().cacheKey() != QIcon().cacheKey() and item.data(Qt.UserRole + 1) == self._thumb_size:
                 continue
-
             self._pending.add(path)
             signals = ThumbnailLoader()
             signals.loaded.connect(self._on_thumbnail_loaded)
-            task = ThumbnailTask(path, self._thumb_size, signals)
-            self._pool.start(task)
+            self._pool.start(ThumbnailTask(path, self._thumb_size, signals))
 
     def _on_thumbnail_loaded(self, path: str, pixmap: QPixmap) -> None:
         self._pending.discard(path)
@@ -185,53 +166,36 @@ class ImageGrid(QWidget):
         placeholder = QPixmap(self._thumb_size, self._thumb_size)
         placeholder.fill(QColor(40, 40, 40))
         placeholder_icon = QIcon(placeholder)
-
         for i in range(self._list.count()):
             item = self._list.item(i)
             item.setIcon(placeholder_icon)
             item.setData(Qt.UserRole + 1, None)
             item.setSizeHint(QSize(self._thumb_size + 10, self._thumb_size + 28))
-
         self._update_icon_size()
 
     def get_selected_paths(self) -> list[str]:
-        return [
-            item.data(Qt.UserRole)
-            for item in self._list.selectedItems()
-        ]
+        return [item.data(Qt.UserRole) for item in self._list.selectedItems()]
 
     def _on_selection_changed(self) -> None:
         self.selection_changed.emit(self.get_selected_paths())
 
     def _on_double_click(self, item: QListWidgetItem) -> None:
-        path = item.data(Qt.UserRole)
-        idx = self._all_paths.index(path) if path in self._all_paths else 0
-        self.open_viewer_requested.emit(self._all_paths, idx)
+        self.open_image_requested.emit(item.data(Qt.UserRole))
 
     def _on_context_menu(self, pos: QPoint) -> None:
         item = self._list.itemAt(pos)
         if item is None:
             return
         path = item.data(Qt.UserRole)
-        selected = self.get_selected_paths()
-        if path not in selected:
-            self._list.clearSelection()
-            item.setSelected(True)
-            selected = [path]
 
         menu = QMenu(self)
+        act_open = menu.addAction(i18n.tr("open_image"))
+        act_open.triggered.connect(lambda: self.open_image_requested.emit(path))
 
-        act_view = menu.addAction("Open Image Viewer")
-        act_view.triggered.connect(lambda: self._open_viewer(selected, path))
-
-        act_explore = menu.addAction("Show in Explorer")
+        act_explore = menu.addAction(i18n.tr("show_in_explorer"))
         act_explore.triggered.connect(lambda: self._show_in_explorer(path))
 
         menu.exec(self._list.viewport().mapToGlobal(pos))
-
-    def _open_viewer(self, paths: list[str], current: str) -> None:
-        idx = paths.index(current) if current in paths else 0
-        self.open_viewer_requested.emit(paths, idx)
 
     def _show_in_explorer(self, path: str) -> None:
         try:

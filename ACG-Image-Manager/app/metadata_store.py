@@ -35,8 +35,12 @@ def _empty() -> dict[str, dict[str, Any]]:
     return {"images": {}}
 
 
+def normalize_path(p: str) -> str:
+    return os.path.abspath(p).replace("\\", "/")
+
+
 def _norm(path: str) -> str:
-    return path.replace("\\", "/")
+    return normalize_path(path)
 
 
 def _safe_entry(entry: dict[str, Any] | None) -> dict[str, Any]:
